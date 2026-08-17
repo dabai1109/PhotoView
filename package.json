@@ -1,97 +1,21 @@
 {
   "name": "photoview",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "productName": "PhotoView",
   "description": "摄影师选片工具 — 支持尼康 NEF 等 RAW 格式",
-  "main": "src/main/main.js",
   "author": "PhotoView",
   "license": "MIT",
+  "private": true,
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev",
-    "build": "electron-builder -w",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:all": "electron-builder -mw",
+    "dev": "tauri dev",
+    "build": "tauri build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
-  },
-  "build": {
-    "appId": "com.photoview.app",
-    "productName": "PhotoView",
-    "compression": "maximum",
-    "afterPack": "scripts/clean-locales.js",
-    "asar": true,
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "src/**/*",
-      "assets/**/*",
-      "package.json"
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "assets/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "perMachine": false,
-      "allowElevation": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "PhotoView",
-      "language": "2052"
-    },
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "icon": "assets/icon.png",
-      "category": "public.app-category.photography"
-    },
-    "dmg": {
-      "title": "${productName} ${version}",
-      "contents": [
-        {
-          "x": 130,
-          "y": 220
-        },
-        {
-          "x": 410,
-          "y": 220,
-          "type": "link",
-          "path": "/Applications"
-        }
-      ]
-    }
+    "tauri:build": "tauri build",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml --lib"
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/cli": "^2.11.4",
-    "electron": "^33.0.0",
-    "electron-builder": "^26.15.3"
+    "@tauri-apps/cli": "^2.11.4"
   }
 }

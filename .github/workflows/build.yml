@@ -48,13 +48,19 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Run Rust tests
+        working-directory: ./src-tauri
+        run: cargo test --lib
+
+      # tagName 为空时 tauri-action 只构建、不发布。
+      # 否则每次 push 到 main 都会创建一个 tag 叫 "main" 的正式 release。
       - name: Build and Release Tauri App
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'PhotoView ${{ github.ref_name }}'
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('PhotoView {0}', github.ref_name) || '' }}
           releaseBody: 'PhotoView 极致轻量选片工作台 (Tauri 2.0 驱动，安装包仅 2~5MB)'
           releaseDraft: false
           prerelease: false

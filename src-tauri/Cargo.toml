@@ -1,6 +1,6 @@
 [package]
 name = "photoview"
-version = "1.0.0"
+version = "1.2.0"
 description = "PhotoView - 摄影师超高速选片工作台"
 authors = ["PhotoView"]
 edition = "2021"
@@ -12,20 +12,24 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# 没有用到任何 Tauri 插件：文件对话框走 rfd，打开文件走 open，
+# 图片读取全在 Rust 侧完成，前端不需要 fs / shell 权限。
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
-tauri-plugin-shell = "2"
-tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 trash = "5"
 walkdir = "2"
 base64 = "0.22"
-kamadak-exif = "0.5"
 dirs = "5"
 open = "5"
 pathdiff = "0.2"
 alphanumeric-sort = "1.5"
 rfd = "0.15"
+
+# 装包体积是这个项目的核心指标之一
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

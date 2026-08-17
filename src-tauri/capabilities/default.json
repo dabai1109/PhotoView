@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "PhotoView 主窗口权限。业务命令全部是本应用自己注册的 invoke handler，不需要任何插件权限。",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

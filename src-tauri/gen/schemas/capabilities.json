@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"PhotoView 主窗口权限。业务命令全部是本应用自己注册的 invoke handler，不需要任何插件权限。","local":true,"windows":["main"],"permissions":["core:default"]}}
