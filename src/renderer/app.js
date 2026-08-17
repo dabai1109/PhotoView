@@ -102,14 +102,16 @@ function getThumb(file, cancelled, priority) {
             return resolve(url);
           }
           const buf = r.data.buffer.slice(r.data.byteOffset, r.data.byteOffset + r.data.byteLength);
+          const needWorkerRotate = (r.orientation || 1) !== 1;
+          const srcW = needWorkerRotate ? (r.storeW || r.width || 0) : (r.width || r.storeW || 0);
+          const srcH = needWorkerRotate ? (r.storeH || r.height || 0) : (r.height || r.storeH || 0);
           const out = await workerCall({
             type: 'thumb',
             buf,
             box: THUMB_BOX,
             orientation: r.orientation || 1,
-            // 缩放尺寸要用文件里"存的"尺寸：Chromium 是先按存储尺寸缩放、再按 EXIF 转向的
-            srcW: r.storeW || r.width || 0,
-            srcH: r.storeH || r.height || 0,
+            srcW,
+            srcH,
           });
           if (!out.ok) return resolve(null);
           const bytes = new Uint8Array(out.ab);

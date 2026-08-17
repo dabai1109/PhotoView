@@ -1,6 +1,6 @@
 [package]
 name = "photoview"
-version = "1.2.1"
+version = "1.2.2"
 description = "PhotoView - 摄影师超高速选片工作台"
 authors = ["PhotoView"]
 edition = "2021"

@@ -9,7 +9,7 @@ use std::time::UNIX_EPOCH;
 
 const MAX_BYTES: u64 = 800 * 1024 * 1024;
 /// 烤缩略图的逻辑变了就升版本，让旧缓存自动失效
-const BAKE_VERSION: &str = "v2";
+const BAKE_VERSION: &str = "v3";
 
 fn cache_dir() -> PathBuf {
     let dir = crate::settings::app_dir().join("thumbs");

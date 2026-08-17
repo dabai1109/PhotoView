@@ -9,9 +9,7 @@ pub mod types;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use std::path::Path;
-use types::{
-    PreviewResponse, RestoreItemResult, RestoreResponse, ScanResult, TrashErrorItem, TrashResponse,
-};
+use types::{PreviewResponse, RestoreResponse, ScanResult, TrashErrorItem, TrashResponse};
 
 /// 所有会读写磁盘的命令都必须离开主线程。
 ///
@@ -193,6 +191,7 @@ async fn restore_files(files: Vec<String>) -> RestoreResponse {
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
+            use types::RestoreItemResult;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
 
             let targets_joined = files
