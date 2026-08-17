@@ -17,6 +17,9 @@
   "build": {
     "appId": "com.photoview.app",
     "productName": "PhotoView",
+    "compression": "maximum",
+    "afterPack": "scripts/clean-locales.js",
+    "asar": true,
     "directories": {
       "output": "dist"
     },
