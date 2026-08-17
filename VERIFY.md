@@ -512,10 +512,8 @@ Get-ChildItem 'H:\照片\nikon\2026-07-04尼康现场' -File |
 
 ## 6. 另外知道的、这次没动的
 
-- **`Ctrl+Z` 从回收站还原没接**。`tauri-bridge.js` 的 `restore` 直接返回
-  `{ok:false, error:'请在系统回收站中手动还原'}`，app.js 会如实提示。
-  `trash` crate 有 `os_limited::{list, restore_all}`（Windows/Linux，macOS 没有），
-  要接需要 cfg 分平台。README 已经改成如实描述。
+- **`Ctrl+Z` 从回收站还原已接入**。`restore_files` 命令通过 Windows Shell COM
+  接口在后台无窗执行项目还原（支持多语言还原动词及轮询确认），`tauri-bridge.js` 已完成对接。
 - **`setNativeTheme` 是空操作**。标题栏跟随主题需要原生窗口 API，
   配色本身由 CSS 的 `data-theme` 负责，视觉上没影响。
 - **`src/main/` 是死代码**。Tauri 只打包 `src/renderer/`（`frontendDist`），

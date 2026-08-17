@@ -100,7 +100,7 @@
     saveFavorites: (root, favList) => invoke('save_favorites', { root, favList }),
     getFavorites: (root) => invoke('get_favorites', { root }),
     trash: (files) => invoke('trash_files', { files }),
-    restore: () => Promise.resolve({ ok: false, error: '请在系统回收站中手动还原' }),
+    restore: (files) => invoke('restore_files', { files }),
     reveal: (p) => invoke('reveal_in_explorer', { path: p }),
     openPath: (p) => invoke('open_path', { path: p }),
     getSettings: () => invoke('get_settings'),

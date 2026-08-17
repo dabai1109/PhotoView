@@ -9,7 +9,9 @@ pub mod types;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use std::path::Path;
-use types::{PreviewResponse, ScanResult, TrashErrorItem, TrashResponse};
+use types::{
+    PreviewResponse, RestoreItemResult, RestoreResponse, ScanResult, TrashErrorItem, TrashResponse,
+};
 
 /// 所有会读写磁盘的命令都必须离开主线程。
 ///
@@ -178,6 +180,136 @@ async fn trash_files(files: Vec<String>) -> TrashResponse {
 }
 
 #[tauri::command]
+async fn restore_files(files: Vec<String>) -> RestoreResponse {
+    blocking(move || {
+        if files.is_empty() {
+            return RestoreResponse {
+                ok: true,
+                results: Vec::new(),
+                error: None,
+            };
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+            let targets_joined = files
+                .iter()
+                .map(|f| format!("'{}'", f.replace('\'', "''")))
+                .collect::<Vec<_>>()
+                .join(",");
+
+            let script = format!(
+                r#"$ErrorActionPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$targets = @({})
+$shell = New-Object -ComObject Shell.Application
+$rb = $shell.Namespace(10)
+$items = @($rb.Items())
+$result = @()
+foreach ($t in $targets) {{
+  $dir  = Split-Path -Parent $t
+  $leaf = Split-Path -Leaf $t
+  $noext = [System.IO.Path]::GetFileNameWithoutExtension($t)
+  if (Test-Path -LiteralPath $t) {{ $result += @{{ path=$t; ok=$true; note='exists' }}; continue }}
+  $found = $null
+  foreach ($it in $items) {{
+    $loc = $rb.GetDetailsOf($it, 1)
+    if ($loc -ne $dir) {{ continue }}
+    if ($it.Name -eq $leaf -or $it.Name -eq $noext) {{ $found = $it; break }}
+  }}
+  if ($null -eq $found) {{ $result += @{{ path=$t; ok=$false; note='not-found' }}; continue }}
+  $done = $false
+  foreach ($v in @($found.Verbs())) {{
+    $n = ($v.Name -replace '&','')
+    if ($n -match '还原|復原|恢复|Restore|Wiederherstellen|Restaurer|Restaurar|Ripristina|元に戻す|복원') {{
+      $v.DoIt(); $done = $true; break
+    }}
+  }}
+  if (-not $done) {{ $found.InvokeVerb('undelete') }}
+  $ok = $false
+  for ($i = 0; $i -lt 20; $i++) {{
+    Start-Sleep -Milliseconds 100
+    if (Test-Path -LiteralPath $t) {{ $ok = $true; break }}
+  }}
+  $result += @{{ path=$t; ok=$ok; note='restored' }}
+}}
+ConvertTo-Json -Compress -InputObject @($result)
+"#,
+                targets_joined
+            );
+
+            let utf16_bytes: Vec<u8> = script
+                .encode_utf16()
+                .flat_map(|u| u.to_le_bytes())
+                .collect();
+            let encoded = BASE64.encode(&utf16_bytes);
+
+            match std::process::Command::new("powershell.exe")
+                .creation_flags(CREATE_NO_WINDOW)
+                .args(["-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", &encoded])
+                .output()
+            {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if stdout.is_empty() {
+                        return RestoreResponse {
+                            ok: false,
+                            results: Vec::new(),
+                            error: Some("PowerShell 未返回还原结果".to_string()),
+                        };
+                    }
+                    if let Ok(list) = serde_json::from_str::<Vec<RestoreItemResult>>(&stdout) {
+                        let all_ok = !list.is_empty() && list.iter().all(|x| x.ok);
+                        RestoreResponse {
+                            ok: all_ok,
+                            results: list,
+                            error: None,
+                        }
+                    } else if let Ok(single) = serde_json::from_str::<RestoreItemResult>(&stdout) {
+                        let all_ok = single.ok;
+                        RestoreResponse {
+                            ok: all_ok,
+                            results: vec![single],
+                            error: None,
+                        }
+                    } else {
+                        RestoreResponse {
+                            ok: false,
+                            results: Vec::new(),
+                            error: Some(format!("解析还原结果失败，输出：{}", stdout)),
+                        }
+                    }
+                }
+                Err(e) => RestoreResponse {
+                    ok: false,
+                    results: Vec::new(),
+                    error: Some(format!("启动 PowerShell 失败：{}", e)),
+                },
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = files;
+            RestoreResponse {
+                ok: false,
+                results: Vec::new(),
+                error: Some("自动从回收站还原目前仅支持 Windows".to_string()),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|| RestoreResponse {
+        ok: false,
+        results: Vec::new(),
+        error: Some("还原任务被中断".to_string()),
+    })
+}
+
+#[tauri::command]
 async fn reveal_in_explorer(path: String) -> bool {
     blocking(move || {
         let p = Path::new(&path);
@@ -281,6 +413,7 @@ pub fn run() {
             save_favorites,
             get_favorites,
             trash_files,
+            restore_files,
             reveal_in_explorer,
             open_path,
             get_settings,

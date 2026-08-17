@@ -93,3 +93,91 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     }
     out
 }
+
+#[test]
+fn test_trash_and_restore_cycle() {
+    let temp_dir = std::env::temp_dir();
+    let test_file = temp_dir.join("photoview_test_restore_cycle.tmp");
+    
+    // 1. 创建临时测试文件
+    std::fs::write(&test_file, "photoview restore test").expect("创建测试临时文件失败");
+    assert!(test_file.exists(), "临时文件应该存在");
+
+    let file_str = test_file.to_string_lossy().to_string();
+
+    // 2. 移到系统回收站
+    trash::delete(&test_file).expect("移到回收站失败");
+    assert!(!test_file.exists(), "移到回收站后文件应该不再存在于原路径");
+
+    // 3. 执行 PowerShell 还原脚本逻辑
+    #[cfg(target_os = "windows")]
+    {
+        use base64::engine::general_purpose::STANDARD as BASE64;
+        use base64::Engine;
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let target_arg = format!("'{}'", file_str.replace('\'', "''"));
+        let script = format!(
+            r#"$ErrorActionPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$targets = @({})
+$shell = New-Object -ComObject Shell.Application
+$rb = $shell.Namespace(10)
+$items = @($rb.Items())
+$result = @()
+foreach ($t in $targets) {{
+  $dir  = Split-Path -Parent $t
+  $leaf = Split-Path -Leaf $t
+  $noext = [System.IO.Path]::GetFileNameWithoutExtension($t)
+  if (Test-Path -LiteralPath $t) {{ $result += @{{ path=$t; ok=$true; note='exists' }}; continue }}
+  $found = $null
+  foreach ($it in $items) {{
+    $loc = $rb.GetDetailsOf($it, 1)
+    if ($loc -ne $dir) {{ continue }}
+    if ($it.Name -eq $leaf -or $it.Name -eq $noext) {{ $found = $it; break }}
+  }}
+  if ($null -eq $found) {{ $result += @{{ path=$t; ok=$false; note='not-found' }}; continue }}
+  $done = $false
+  foreach ($v in @($found.Verbs())) {{
+    $n = ($v.Name -replace '&','')
+    if ($n -match '还原|復原|恢复|Restore|Wiederherstellen|Restaurer|Restaurar|Ripristina|元に戻す|복원') {{
+      $v.DoIt(); $done = $true; break
+    }}
+  }}
+  if (-not $done) {{ $found.InvokeVerb('undelete') }}
+  $ok = $false
+  for ($i = 0; $i -lt 20; $i++) {{
+    Start-Sleep -Milliseconds 100
+    if (Test-Path -LiteralPath $t) {{ $ok = $true; break }}
+  }}
+  $result += @{{ path=$t; ok=$ok; note='restored' }}
+}}
+ConvertTo-Json -Compress -InputObject @($result)
+"#,
+            target_arg
+        );
+
+        let utf16_bytes: Vec<u8> = script
+            .encode_utf16()
+            .flat_map(|u| u.to_le_bytes())
+            .collect();
+        let encoded = BASE64.encode(&utf16_bytes);
+
+        let out = std::process::Command::new("powershell.exe")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", &encoded])
+            .output()
+            .expect("PowerShell 还原执行失败");
+
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        println!("Restore test output: {}", stdout);
+
+        // 4. 验证文件已成功回到原路径
+        assert!(test_file.exists(), "从回收站还原后文件应该重新存在");
+
+        // 5. 清理测试文件
+        let _ = std::fs::remove_file(&test_file);
+    }
+}
+

@@ -110,3 +110,17 @@ pub struct TrashErrorItem {
     pub file: String,
     pub error: String,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RestoreItemResult {
+    pub path: String,
+    pub ok: bool,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RestoreResponse {
+    pub ok: bool,
+    pub results: Vec<RestoreItemResult>,
+    pub error: Option<String>,
+}
