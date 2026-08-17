@@ -18,14 +18,22 @@
         "center": true,
         "fullscreen": false,
         "resizable": true,
-        "decorations": true,
+        "decorations": false,
         "transparent": false,
         "theme": "Dark",
         "dragDropEnabled": true
       }
     ],
     "security": {
-      "csp": "default-src 'none'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; child-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost; font-src 'self'"
+      "csp": "default-src 'none'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; child-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://github.com https://objects.githubusercontent.com; font-src 'self'"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwQUM4NDA2QzEzNTRBMjkKUldRcFNqWEJCb1Nzb0hRSVpaM0tzdEt1SVRHQU9LM2hFdU1yRGt2UE93T0IrbE9jVjBONFNaUEsK",
+      "endpoints": [
+        "https://github.com/dabai1109/PhotoView/releases/latest/download/latest.json"
+      ]
     }
   },
   "bundle": {

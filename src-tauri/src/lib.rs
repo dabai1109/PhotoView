@@ -5,6 +5,7 @@ pub mod settings;
 pub mod thumbs;
 pub mod tiff;
 pub mod types;
+pub mod update;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -391,9 +392,32 @@ async fn set_session(root: String, data: serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
+#[tauri::command]
+fn window_minimize(window: tauri::Window) {
+    let _ = window.minimize();
+}
+
+#[tauri::command]
+fn window_toggle_maximize(window: tauri::Window) {
+    if let Ok(is_max) = window.is_maximized() {
+        if is_max {
+            let _ = window.unmaximize();
+        } else {
+            let _ = window.maximize();
+        }
+    }
+}
+
+#[tauri::command]
+fn window_close(window: tauri::Window) {
+    let _ = window.close();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|_app| {
             // 启动后台清理，别让缩略图缓存无限长大
             tauri::async_runtime::spawn(async {
@@ -419,8 +443,15 @@ pub fn run() {
             set_settings,
             get_recent,
             get_session,
-            set_session
+            set_session,
+            window_minimize,
+            window_toggle_maximize,
+            window_close,
+            update::check_for_updates,
+            update::download_and_install_update,
+            update::restart_app
         ])
         .run(tauri::generate_context!())
         .expect("运行 PhotoView 时发生错误");
 }
+

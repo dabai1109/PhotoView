@@ -58,7 +58,7 @@ pub fn defaults() -> Value {
         "favoritesFileName": "favorites.txt",
         "groupRawJpeg": true,
         "recursive": true,
-        "autoAdvanceOnFavorite": true,
+        "autoAdvanceOnFavorite": false,
         "autoAdvanceOnDelete": true,
         "confirmDelete": false,
         "thumbSize": 220,

@@ -3,3 +3,5 @@ dist/
 shots/
 *.log
 src-tauri/target/
+.tauri/
+*.key

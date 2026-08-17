@@ -10,7 +10,7 @@ const DEFAULTS = {
   favoritesFileName: 'favorites.txt', // 记录在相册根目录下的文件名（支持 .txt 或 .json）
   groupRawJpeg: true,
   recursive: true,
-  autoAdvanceOnFavorite: true,
+  autoAdvanceOnFavorite: false,
   autoAdvanceOnDelete: true,
   confirmDelete: false,
   thumbSize: 220,

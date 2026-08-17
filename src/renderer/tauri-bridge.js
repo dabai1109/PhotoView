@@ -111,6 +111,10 @@
     clearCache: () => invoke('clear_cache'),
     // 标题栏跟随主题需要原生窗口 API，暂不接；配色本身由 CSS 的 data-theme 负责
     setNativeTheme: () => Promise.resolve(true),
+    // 自动更新
+    checkForUpdates: () => invoke('check_for_updates'),
+    downloadAndInstallUpdate: () => invoke('download_and_install_update'),
+    restartApp: () => invoke('restart_app'),
   };
 
   /* ---------- 原生拖放 → 合成 DOM 事件 ---------- */
@@ -139,9 +143,167 @@
     });
   };
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', listenDragDrop, { once: true });
-  } else {
+  /* ---------- 窗口控制按钮 ---------- */
+
+  const initWindowControls = () => {
+    const minBtn = document.getElementById('win-min');
+    const maxBtn = document.getElementById('win-max');
+    const closeBtn = document.getElementById('win-close');
+
+    if (minBtn) minBtn.addEventListener('click', () => invoke('window_minimize'));
+    if (maxBtn) maxBtn.addEventListener('click', () => invoke('window_toggle_maximize'));
+    if (closeBtn) closeBtn.addEventListener('click', () => invoke('window_close'));
+  };
+
+  /* ---------- 自动更新 UI 联动 ---------- */
+
+  const initAutoUpdater = () => {
+    const checkBtn = document.getElementById('btn-check-update');
+    const modal = document.getElementById('update-modal');
+    const newVerBadge = document.getElementById('update-new-version');
+    const releaseDate = document.getElementById('update-release-date');
+    const notesContent = document.getElementById('update-notes-content');
+    const progressWrap = document.getElementById('update-progress-wrap');
+    const progressStatus = document.getElementById('update-progress-status');
+    const progressPct = document.getElementById('update-progress-pct');
+    const progressBar = document.getElementById('update-progress-bar');
+    const actionBtn = document.getElementById('btn-update-action');
+    const cancelBtn = document.getElementById('btn-update-cancel');
+
+    let updateState = 'idle'; // idle | downloading | ready
+
+    const showUpdateModal = (info) => {
+      if (!modal) return;
+      if (newVerBadge) newVerBadge.textContent = 'v' + (info.version || '');
+      if (releaseDate) releaseDate.textContent = info.date ? `发布于 ${info.date.split('T')[0]}` : '';
+      if (notesContent) notesContent.textContent = info.body || '本次更新包含性能提升与细节修复。';
+      if (progressWrap) progressWrap.hidden = true;
+      if (actionBtn) {
+        actionBtn.textContent = '立即更新';
+        actionBtn.disabled = false;
+      }
+      if (cancelBtn) {
+        cancelBtn.hidden = false;
+        cancelBtn.textContent = '稍后';
+      }
+      updateState = 'idle';
+      modal.hidden = false;
+    };
+
+    const doCheck = async (interactive = false) => {
+      if (checkBtn && interactive) {
+        checkBtn.disabled = true;
+        checkBtn.textContent = '检查中…';
+      }
+      try {
+        const info = await invoke('check_for_updates');
+        if (info && info.available) {
+          showUpdateModal(info);
+        } else if (interactive) {
+          alert('当前已是最新版本 (v' + ((info && info.currentVersion) || '1.2.2') + ')');
+        }
+      } catch (err) {
+        console.warn('[Updater] 检查更新失败:', err);
+        if (interactive) {
+          alert('检查更新失败，请稍后重试或前往 GitHub 查看最新 Release。');
+        }
+      } finally {
+        if (checkBtn && interactive) {
+          checkBtn.disabled = false;
+          checkBtn.textContent = '检查新版本';
+        }
+      }
+    };
+
+    if (checkBtn) {
+      checkBtn.addEventListener('click', () => doCheck(true));
+    }
+
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        if (modal) modal.hidden = true;
+      });
+    }
+
+    if (actionBtn) {
+      actionBtn.addEventListener('click', async () => {
+        if (updateState === 'ready') {
+          invoke('restart_app');
+          return;
+        }
+
+        if (updateState === 'downloading') return;
+
+        updateState = 'downloading';
+        actionBtn.disabled = true;
+        actionBtn.textContent = '正在下载…';
+        if (cancelBtn) cancelBtn.hidden = true;
+        if (progressWrap) progressWrap.hidden = false;
+        if (progressBar) progressBar.style.width = '0%';
+        if (progressPct) progressPct.textContent = '0%';
+        if (progressStatus) progressStatus.textContent = '正在连接 GitHub 服务器…';
+
+        try {
+          const ok = await invoke('download_and_install_update');
+          if (ok) {
+            updateState = 'ready';
+            if (progressStatus) progressStatus.textContent = '下载完成，随时可以重启生效！';
+            if (progressBar) progressBar.style.width = '100%';
+            if (progressPct) progressPct.textContent = '100%';
+            actionBtn.disabled = false;
+            actionBtn.textContent = '立即重启生效';
+          } else {
+            throw new Error('未获取到有效更新包');
+          }
+        } catch (e) {
+          console.error('[Updater] 下载安装失败:', e);
+          updateState = 'idle';
+          if (progressStatus) progressStatus.textContent = '更新失败: ' + e;
+          actionBtn.disabled = false;
+          actionBtn.textContent = '重试';
+          if (cancelBtn) cancelBtn.hidden = false;
+        }
+      });
+    }
+
+    // 监听原生下载进度事件
+    const ev = window.__TAURI__ && window.__TAURI__.event;
+    if (ev && typeof ev.listen === 'function') {
+      try {
+        Promise.resolve(
+          ev.listen('update-download-progress', (e) => {
+            const p = e && e.payload;
+            if (!p) return;
+            const pct = p.percentage !== null && p.percentage !== undefined ? Math.round(p.percentage) : null;
+            if (progressBar && pct !== null) progressBar.style.width = `${pct}%`;
+            if (progressPct && pct !== null) progressPct.textContent = `${pct}%`;
+            if (progressStatus) {
+              const mb = (p.downloaded / (1024 * 1024)).toFixed(1);
+              const totalMb = p.total ? (p.total / (1024 * 1024)).toFixed(1) : null;
+              progressStatus.textContent = totalMb ? `已下载 ${mb} MB / ${totalMb} MB` : `已下载 ${mb} MB…`;
+            }
+          })
+        ).catch(() => {});
+      } catch {}
+    }
+
+    // 启动 3 秒后静默检查一次
+    setTimeout(() => {
+      doCheck(false);
+    }, 3000);
+  };
+
+  const init = () => {
     listenDragDrop();
+    initWindowControls();
+    initAutoUpdater();
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, { once: true });
+  } else {
+    init();
   }
 })();
+
+
