@@ -334,16 +334,27 @@ function updateCounts() {
     else if (g.state === 'fav') n.fav++;
     else n.del++;
   }
-  for (const b of document.querySelectorAll('#filters .chip')) b.querySelector('b').textContent = n[b.dataset.filter];
+  for (const b of document.querySelectorAll('#filters .chip')) {
+    const countEl = b.querySelector('b');
+    if (countEl) countEl.textContent = n[b.dataset.filter] || 0;
+  }
   const cur = S.view[S.cur];
   $('#counter').innerHTML = S.view.length
     ? `<b>${S.cur + 1}</b> / ${S.view.length}${cur ? ' · ' + escapeHtml(cur.name) : ''}`
     : '';
   const fav = cur && cur.state === 'fav';
-  $('#act-fav').classList.toggle('on', !!fav);
-  $('#act-fav').lastChild.textContent = fav ? ' 已收藏' : ' 收藏';
-  $('#act-undo').disabled = !S.undo.length;
-  $('#act-undo').style.opacity = S.undo.length ? '1' : '.4';
+  const actFavBtn = $('#act-fav');
+  if (actFavBtn) {
+    actFavBtn.classList.toggle('on', !!fav);
+    const actText = actFavBtn.querySelector('.act-text');
+    if (actText) actText.textContent = fav ? '已收藏' : '收藏';
+    else actFavBtn.lastChild.textContent = fav ? ' 已收藏' : ' 收藏';
+  }
+  const actUndoBtn = $('#act-undo');
+  if (actUndoBtn) {
+    actUndoBtn.disabled = !S.undo.length;
+    actUndoBtn.style.opacity = S.undo.length ? '1' : '.4';
+  }
 }
 
 /* ============ 网格 ============ */
@@ -751,15 +762,17 @@ function renderInfo(g, r) {
 
 function drawHistogram(h) {
   const c = $('#histogram');
+  if (!c) return;
   const ctx = c.getContext('2d');
   const W = (c.width = c.clientWidth * devicePixelRatio);
-  const H = (c.height = 90 * devicePixelRatio);
+  const H = (c.height = 84 * devicePixelRatio);
   ctx.clearRect(0, 0, W, H);
   let max = 0;
   for (let i = 1; i < 255; i++) max = Math.max(max, h.r[i], h.g[i], h.b[i]);
   if (!max) return;
-  ctx.globalCompositeOperation = 'lighter';
-  const draw = (arr, color) => {
+
+  ctx.globalCompositeOperation = 'screen';
+  const drawChannel = (arr, fillColor, strokeColor) => {
     ctx.beginPath();
     ctx.moveTo(0, H);
     for (let i = 0; i < 256; i++) {
@@ -768,12 +781,25 @@ function drawHistogram(h) {
     }
     ctx.lineTo(W, H);
     ctx.closePath();
-    ctx.fillStyle = color;
+    ctx.fillStyle = fillColor;
     ctx.fill();
+
+    if (strokeColor) {
+      ctx.beginPath();
+      for (let i = 0; i < 256; i++) {
+        const y = H - Math.min(1, arr[i] / max) * (H - 4);
+        if (i === 0) ctx.moveTo(0, y);
+        else ctx.lineTo((i / 255) * W, y);
+      }
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 1 * devicePixelRatio;
+      ctx.stroke();
+    }
   };
-  draw(h.r, 'rgba(230,60,60,.55)');
-  draw(h.g, 'rgba(60,210,90,.55)');
-  draw(h.b, 'rgba(70,120,240,.55)');
+
+  drawChannel(h.r, 'rgba(239, 68, 68, 0.45)', 'rgba(248, 113, 113, 0.7)');
+  drawChannel(h.g, 'rgba(34, 197, 94, 0.45)', 'rgba(74, 222, 128, 0.7)');
+  drawChannel(h.b, 'rgba(56, 189, 248, 0.45)', 'rgba(125, 211, 252, 0.7)');
   ctx.globalCompositeOperation = 'source-over';
 }
 
@@ -1003,6 +1029,7 @@ function toast(msg, opts = {}) {
   setTimeout(remove, opts.err ? 6000 : 3200);
   while (wrap.children.length > 3) wrap.firstChild.remove();
 }
+window.toast = toast;
 
 /* ============ 主题管理 ============ */
 function getEffectiveTheme(pref) {
@@ -1217,6 +1244,12 @@ $('#btn-clear-cache').onclick = async () => {
 for (const m of ['#settings-modal', '#help-modal']) {
   $(m).onclick = (e) => {
     if (e.target === $(m)) $(m).hidden = true;
+  };
+}
+for (const btn of document.querySelectorAll('.modal-close-btn')) {
+  btn.onclick = (e) => {
+    const m = e.target.closest('.modal');
+    if (m) m.hidden = true;
   };
 }
 

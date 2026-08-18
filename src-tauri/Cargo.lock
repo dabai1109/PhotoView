@@ -2706,7 +2706,7 @@ dependencies = [
 
 [[package]]
 name = "photoview"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "alphanumeric-sort",
  "base64 0.22.1",

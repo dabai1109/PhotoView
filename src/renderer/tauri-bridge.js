@@ -200,12 +200,22 @@
         if (info && info.available) {
           showUpdateModal(info);
         } else if (interactive) {
-          alert('当前已是最新版本 (v' + ((info && info.currentVersion) || '1.2.2') + ')');
+          const v = (info && info.currentVersion) || document.getElementById('app-version')?.textContent || '1.4.0';
+          const verStr = v.startsWith('v') ? v : 'v' + v;
+          if (window.toast) {
+            window.toast(`当前已是最新版本 (${verStr})`);
+          } else {
+            console.log(`[Updater] 当前已是最新版本 (${verStr})`);
+          }
         }
       } catch (err) {
         console.warn('[Updater] 检查更新失败:', err);
         if (interactive) {
-          alert('检查更新失败，请稍后重试或前往 GitHub 查看最新 Release。');
+          if (window.toast) {
+            window.toast('检查更新失败，请稍后重试或检查网络', { err: true });
+          } else {
+            console.warn('[Updater] 检查更新失败');
+          }
         }
       } finally {
         if (checkBtn && interactive) {
