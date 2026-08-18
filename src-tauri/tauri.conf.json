@@ -30,7 +30,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwQUM4NDA2QzEzNTRBMjkKUldRcFNqWEJCb1Nzb0hRSVpaM0tzdEt1SVRHQU9LM2hFdU1yRGt2UE93T0IrbE9jVjBONFNaUEsK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUwMUQ1NkFFMkYzNTAwM0UKUldRK0FEVXZybFlkNFBqSi9xUkNzZm1nOUlhUU8vMURydDRmTnNEOTFlR2JHOXlTWVZudEloSEwK",
       "endpoints": [
         "https://github.com/dabai1109/PhotoView/releases/latest/download/latest.json"
       ]

@@ -5,3 +5,4 @@ shots/
 src-tauri/target/
 .tauri/
 *.key
+updater_key*
