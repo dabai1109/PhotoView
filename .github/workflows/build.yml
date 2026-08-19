@@ -48,9 +48,14 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Run frontend tests
+        run: npm run test:js
+
+      # 不加 --lib：这样 tests/fixtures.rs 的端到端用例（跑真实 test-photos/）也会执行。
+      # 会动系统回收站的那个用例已标 #[ignore]，不会在 CI 上跑。
       - name: Run Rust tests
         working-directory: ./src-tauri
-        run: cargo test --lib
+        run: cargo test
 
       # tagName 为空时 tauri-action 只构建、不发布。
       # 否则每次 push 到 main 都会创建一个 tag 叫 "main" 的正式 release。

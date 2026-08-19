@@ -1,6 +1,6 @@
 {
   "name": "photoview",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "productName": "PhotoView",
   "description": "摄影师选片工具 — 支持尼康 NEF 等 RAW 格式",
   "author": "PhotoView",
@@ -12,7 +12,9 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "test": "cargo test --manifest-path src-tauri/Cargo.toml --lib"
+    "test": "npm run test:js && npm run test:rust",
+    "test:js": "node --test test/orientation.test.js test/session-cursor.test.js",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.11.1",

@@ -66,14 +66,26 @@ src-tauri/src/   Rust 后端
 src/renderer/    界面（原生 ESM，无框架）
   tauri-bridge.js  Tauri IPC → window.pv 适配层
 src/main/        Electron 版主进程（已停用，保留作参照实现）
-test/            Electron 时期的端到端脚本（需要 electron，已不在 CI 里跑）
+test/            orientation / session-cursor 是前端回归测试（在 CI 里跑）；
+                 其余是 Electron 时期的端到端脚本（需要 electron，已不跑）
 ```
 
 ## 测试
 
 ```bash
-npm test                   # Rust 单测：解析器 / 候选选择 / 路径穿越 / 缓存键
-cargo test --manifest-path src-tauri/Cargo.toml
+npm test        # 前端回归测试 + Rust 全部测试
+npm run test:js    # 方向数学 / 会话游标恢复（node --test，零依赖）
+npm run test:rust  # 解析器 / 候选选择 / 路径穿越 / 缓存键 + test-photos 端到端
+```
+
+`test:rust` 不带 `--lib`，所以 `src-tauri/tests/fixtures.rs` 里跑真实 `test-photos/` 的端到端用例也会执行。
+唯一默认跳过的是 `test_trash_and_restore_cycle`（会操作真实回收站），要验证时手动跑：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml -- --ignored test_trash_and_restore_cycle
 ```
 
 测试素材 `test-photos/` 里专门放了带 EXIF 方向标签的竖拍 JPEG（`ZS_*`，方向 3/6/8）和内嵌预览不带 EXIF 的 NEF，两条方向路径都能覆盖到。
+
+EXIF 方向有两套独立实现（缩略图走 canvas 真转像素，大图走 CSS transform 只在屏幕上转），
+`test/orientation.test.js` 直接读源文件、对着 EXIF 规范把 8 个方向逐一钉住 —— 这两套曾经各自跑偏过。

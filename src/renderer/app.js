@@ -24,7 +24,9 @@ const S = {
 
 const swapped = (o) => o >= 5 && o <= 8;
 const mirrored = (o) => o === 2 || o === 4 || o === 5 || o === 7;
-const rotDeg = (o) => (o === 3 || o === 4 ? 180 : o === 5 || o === 6 ? 90 : o === 7 || o === 8 ? 270 : 0);
+// 注意 5 配 270、7 配 90，不是按数字顺序配的：applyTransform 是先 scaleX(-1) 再 rotate，
+// 镜像会把旋转方向也翻过来。写成 5→90 / 7→270 的话这两个方向会互相显示成对方（差 180°）。
+const rotDeg = (o) => (o === 3 || o === 4 ? 180 : o === 6 || o === 7 ? 90 : o === 5 || o === 8 ? 270 : 0);
 
 const fmtSize = (n) =>
   n >= 1073741824 ? (n / 1073741824).toFixed(2) + ' GB' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB';
@@ -235,12 +237,17 @@ async function openFolder(root) {
   }));
   S.undo = [];
   S.filter = 'all';
-  S.cur = Math.min(S.session.cursor || 0, Math.max(0, S.all.length - 1));
+  // 上一个相册的 view 必须先清掉：applyFilter 靠 S.view[S.cur] 做「保持当前选中」，
+  // 留着旧数组的话它会拿上个相册的对象去 indexOf，永远匹配不上。
+  S.view = [];
+  S.cur = 0;
 
   const shortRoot = root.length > 60 ? '…' + root.slice(-58) : root;
   $('#folder-name').innerHTML = `<b>${escapeHtml(root.split(/[\\/]/).pop())}</b> · ${escapeHtml(shortRoot)}`;
 
   applyFilter('all');
+  // 恢复上次看到哪张必须放在 applyFilter 之后 —— 它会把 S.cur 归零
+  S.cur = Math.min(Math.max(0, Math.round(Number(S.session.cursor) || 0)), Math.max(0, S.view.length - 1));
   showGrid();
   if (!S.all.length) toast('这个文件夹里没有找到支持的照片格式', { err: true });
 }

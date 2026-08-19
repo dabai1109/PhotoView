@@ -94,7 +94,11 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// 真的把文件丢进系统回收站再还原回来，会动到跑测试这台机器的回收站，
+/// 而且依赖 Shell COM + 本地化的「还原」动词名，CI 上跑不稳。
+/// 默认跳过，要验证时手动跑：`cargo test -- --ignored test_trash_and_restore_cycle`
 #[test]
+#[ignore = "会操作真实回收站，需手动执行"]
 fn test_trash_and_restore_cycle() {
     let temp_dir = std::env::temp_dir();
     let test_file = temp_dir.join("photoview_test_restore_cycle.tmp");
