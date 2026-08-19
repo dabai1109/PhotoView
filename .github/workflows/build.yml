@@ -57,9 +57,14 @@ jobs:
         working-directory: ./src-tauri
         run: cargo test
 
-      # tagName 为空时 tauri-action 只构建、不发布。
-      # 否则每次 push 到 main 都会创建一个 tag 叫 "main" 的正式 release。
+      # 打包只在 tag（发版）和手动触发（想验证打包链路）时做。
+      # 普通 push 分支只跑上面的测试就够了 —— 否则每个提交都要在两个平台各跑一遍
+      # release 模式的 Rust 构建（lto + codegen-units=1），纯属烧 CI 时长。
+      #
+      # tagName 为空时 tauri-action 只构建、不发布，所以手动触发不会误发 release；
+      # 也正因如此，push 到 main 不会创建一个 tag 叫 "main" 的正式 release。
       - name: Build and Release Tauri App
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
