@@ -119,9 +119,23 @@
 
   /* ---------- 原生拖放 → 合成 DOM 事件 ---------- */
 
-  const fire = (type, dataTransfer) => {
+  /** Tauri 给的 position 是物理像素，DOM 这边要的是 CSS 像素 */
+  const toClient = (pos) => {
+    if (!pos) return null;
+    const r = window.devicePixelRatio || 1;
+    return { x: (Number(pos.x) || 0) / r, y: (Number(pos.y) || 0) / r };
+  };
+
+  const fire = (type, dataTransfer, pos) => {
     const evt = new Event(type, { cancelable: true, bubbles: false });
     if (dataTransfer) Object.defineProperty(evt, 'dataTransfer', { value: dataTransfer });
+    // 落点坐标：事件是直接 dispatch 到 window 的（收不到冒泡），
+    // 对比工作台只能靠它 + elementFromPoint 判断照片被拖到了哪个槽位
+    const c = toClient(pos);
+    if (c) {
+      Object.defineProperty(evt, 'clientX', { value: c.x });
+      Object.defineProperty(evt, 'clientY', { value: c.y });
+    }
     window.dispatchEvent(evt);
   };
 
@@ -133,13 +147,15 @@
         Promise.resolve(ev.listen(name, cb)).catch(() => {});
       } catch {}
     };
+    const posOf = (e) => (e && e.payload && e.payload.position) || null;
 
-    on('tauri://drag-enter', () => fire('dragenter', { types: ['Files'] }));
+    on('tauri://drag-enter', (e) => fire('dragenter', { types: ['Files'] }, posOf(e)));
+    on('tauri://drag-over', (e) => fire('dragover', { types: ['Files'] }, posOf(e)));
     on('tauri://drag-leave', () => fire('dragleave', null));
     on('tauri://drag-drop', (e) => {
       const paths = (e && e.payload && e.payload.paths) || [];
       // app.js 会走 pv.pathForFile(f) 取路径，这里给出它认得的形状
-      fire('drop', { files: paths.map((p) => ({ path: p })), types: ['Files'] });
+      fire('drop', { files: paths.map((p) => ({ path: p })), types: ['Files'] }, posOf(e));
     });
   };
 
@@ -200,7 +216,7 @@
         if (info && info.available) {
           showUpdateModal(info);
         } else if (interactive) {
-          const v = (info && info.currentVersion) || document.getElementById('app-version')?.textContent || '1.4.0';
+          const v = (info && info.currentVersion) || document.getElementById('app-version')?.textContent || '1.5.0';
           const verStr = v.startsWith('v') ? v : 'v' + v;
           if (window.toast) {
             window.toast(`当前已是最新版本 (${verStr})`);

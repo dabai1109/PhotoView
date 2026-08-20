@@ -15,11 +15,21 @@ const S = {
   view: [],
   cur: 0,
   filter: 'all',
-  mode: 'empty', // empty | grid | loupe
+  mode: 'empty', // empty | grid | loupe | compare
   settings: {},
   session: { favorites: [], cursor: 0 },
   undo: [],
   loupe: { url: null, zoom: 1, fit: 1, panX: 0, panY: 0, o: 1, srcW: 0, srcH: 0, natW: 0, natH: 0, token: 0 },
+  compare: {
+    items: [],
+    mode: 'split', // split | curtain | blink
+    layout: '2-col', // 2-col | 2-row | 3-grid | 4-grid | 6-grid
+    curSlot: 0,
+    syncZoomPan: true,
+    curtainSplit: 0.5,
+    blinkIndex: 0,
+    prevMode: 'grid',
+  },
 };
 
 const swapped = (o) => o >= 5 && o <= 8;
@@ -138,8 +148,10 @@ function getThumb(file, cancelled, priority) {
 
 /* ============ 全尺寸预览缓存（大图秒开的关键） ============
    把已看过 / 预取到的大图连同解码结果留在内存里，前后翻页时直接命中，
-   不用再走 IPC → 建 blob → 解码这条链路。 */
-const FULL_MAX = 6;
+   不用再走 IPC → 建 blob → 解码这条链路。
+   上限必须比「对比工作台最多 6 张 + 大图前后预取」更大：evict 时会 revoke objectURL，
+   容量卡得太死就会把某个正在显示的 <img> 的 URL 撤掉，下次重新赋 src 就是破图。 */
+const FULL_MAX = 12;
 const fullCache = new Map(); // file -> {url, blob, o, w, h, exif, fileSize, hist}
 const fullInflight = new Map();
 
@@ -190,8 +202,8 @@ function loadFull(file) {
         const im = new Image();
         im.src = rec.url;
         const d = im.decode();
-        if (d && d.catch) d.catch(() => {});
-      } catch {}
+        if (d && d.catch) d.catch(() => { });
+      } catch { }
       return rec;
     } catch (e) {
       return { error: String((e && e.message) || e) };
@@ -313,9 +325,9 @@ function applyFilter(f) {
   S.filter = f;
   S.view =
     f === 'all' ? S.all.slice()
-    : f === 'todo' ? S.all.filter((g) => g.state === 'none')
-    : f === 'fav' ? S.all.filter((g) => g.state === 'fav')
-    : S.all.filter((g) => g.state === 'del');
+      : f === 'todo' ? S.all.filter((g) => g.state === 'none')
+        : f === 'fav' ? S.all.filter((g) => g.state === 'fav')
+          : S.all.filter((g) => g.state === 'del');
 
   const idx = curItem ? S.view.indexOf(curItem) : -1;
   S.cur = idx >= 0 ? idx : 0;
@@ -493,6 +505,7 @@ gridScroll.addEventListener('scroll', () => renderGrid(false), { passive: true }
 window.addEventListener('resize', () => {
   if (S.mode === 'grid') renderGrid(true);
   else if (S.mode === 'loupe') layoutLoupe();
+  else if (S.mode === 'compare') relayoutCompare();
 });
 
 function scrollCurrentIntoView() {
@@ -510,8 +523,11 @@ function showGrid() {
   S.mode = 'grid';
   $('#grid-view').hidden = false;
   $('#loupe').hidden = true;
+  $('#compare-view').hidden = true;
   $('#actionbar').hidden = false;
   $('#btn-grid').classList.add('on');
+  const btnCmp = $('#btn-compare');
+  if (btnCmp) btnCmp.classList.remove('on');
   renderGrid(true);
   scrollCurrentIntoView();
   refreshCards();
@@ -523,11 +539,1138 @@ function showLoupe() {
   S.mode = 'loupe';
   $('#grid-view').hidden = true;
   $('#loupe').hidden = false;
+  $('#compare-view').hidden = true;
   $('#actionbar').hidden = false;
   $('#btn-grid').classList.remove('on');
+  const btnCmp = $('#btn-compare');
+  if (btnCmp) btnCmp.classList.remove('on');
   $('#loupe').classList.toggle('no-info', !S.settings.showInfo);
   buildFilmstrip();
   loadLoupe();
+}
+
+/* ==========================================================================
+   照片细节对比工作台 (Compare Studio)
+   ========================================================================== */
+
+function makeCompareItem(gOrPath) {
+  if (typeof gOrPath === 'string') {
+    const fn = gOrPath.split(/[\\/]/).pop();
+    const extMatch = fn.match(/\.([^.]+)$/);
+    const ext = extMatch ? extMatch[1].toUpperCase() : 'IMG';
+    return {
+      id: gOrPath,
+      name: fn,
+      ext,
+      primary: gOrPath,
+      files: [gOrPath],
+      state: 'none',
+      size: 0,
+      meta: null,
+      zoom: 1,
+      fit: 1,
+      panX: 0,
+      panY: 0,
+      natW: 0,
+      natH: 0,
+      srcW: 0,
+      srcH: 0,
+      o: 1,
+      locked: true,
+    };
+  }
+  return {
+    id: gOrPath.id || gOrPath.primary,
+    name: gOrPath.name,
+    ext: gOrPath.ext,
+    primary: gOrPath.primary,
+    files: gOrPath.files || [gOrPath.primary],
+    state: gOrPath.state || 'none',
+    size: gOrPath.size || 0,
+    meta: gOrPath.meta || null,
+    zoom: 1,
+    fit: 1,
+    panX: 0,
+    panY: 0,
+    natW: 0,
+    natH: 0,
+    srcW: 0,
+    srcH: 0,
+    o: 1,
+    locked: true,
+  };
+}
+
+/* 各布局能装下的槽位数。布局按钮随时可点，装不下时 CSS 那边有 grid-auto-rows: 1fr 兜底，
+   这里只负责在增删槽位时挑一个合理的默认值。 */
+const LAYOUT_CAP = { '2-col': 2, '2-row': 2, '3-grid': 3, '4-grid': 4, '6-grid': 6 };
+const canonicalLayout = (n) => (n <= 2 ? '2-col' : n === 3 ? '3-grid' : n === 4 ? '4-grid' : '6-grid');
+
+function autoCompareLayout() {
+  // 用户手动选的布局正好装得下就尊重它（比如 2 张时选了上下分屏）
+  if (LAYOUT_CAP[S.compare.layout] === S.compare.items.length) return;
+  S.compare.layout = canonicalLayout(S.compare.items.length);
+}
+
+function openCompare(initialItems) {
+  let items = [];
+  if (initialItems && initialItems.length) {
+    items = initialItems.map(makeCompareItem);
+  } else {
+    // 从当前相册中自动挑选 2 张（当前选中的与下一张）
+    if (S.view.length >= 2) {
+      const cur = S.view[S.cur];
+      const next = S.view[S.cur + 1] || S.view[S.cur - 1];
+      items = [cur, next].filter(Boolean).map(makeCompareItem);
+    } else if (S.view.length === 1) {
+      items = [makeCompareItem(S.view[0])];
+    } else {
+      toast('当前相册中没有可对比的照片，可直接拖入多张照片开始对比');
+      return;
+    }
+  }
+
+  S.compare.prevMode = S.mode === 'compare' ? 'grid' : S.mode;
+  S.compare.items = items.slice(0, 6); // 最多支持 6 张对比
+  S.compare.curSlot = 0;
+  S.mode = 'compare';
+
+  // 自适应选择分屏布局
+  S.compare.layout = canonicalLayout(S.compare.items.length);
+
+  $('#empty').hidden = true;
+  $('#grid-view').hidden = true;
+  $('#loupe').hidden = true;
+  $('#actionbar').hidden = true;
+  $('#compare-view').hidden = false;
+  $('#btn-grid').classList.remove('on');
+  const btnCmp = $('#btn-compare');
+  if (btnCmp) btnCmp.classList.add('on');
+
+  renderCompare();
+  buildCompareFilmstrip();
+  toast(`已进入细节对比 · 共 ${S.compare.items.length} 张照片`);
+}
+
+function closeCompare() {
+  $('#compare-view').hidden = true;
+  const btnCmp = $('#btn-compare');
+  if (btnCmp) btnCmp.classList.remove('on');
+
+  // 如果对比中选中了某张在相册中的照片，回到该照片
+  const curItem = S.compare.items[S.compare.curSlot];
+  if (curItem) {
+    const idx = S.view.findIndex((g) => g.primary === curItem.primary || g.id === curItem.id);
+    if (idx >= 0) S.cur = idx;
+  }
+
+  if (S.compare.prevMode === 'loupe' && S.view.length) {
+    showLoupe();
+  } else if (S.view.length) {
+    showGrid();
+  } else {
+    S.mode = 'empty';
+    $('#empty').hidden = false;
+    $('#topbar-tools').hidden = true;
+  }
+}
+
+function toggleCompare() {
+  if (S.mode === 'compare') closeCompare();
+  else openCompare();
+}
+
+/* 只刷新浮岛按钮态。切同步锁 / 换激活槽位这类操作不该把整个舞台重建一遍 ——
+   renderSplitCompare 会 innerHTML='' 重来，六张图会一起闪一下加载遮罩。 */
+function updateCompareDock() {
+  for (const pill of document.querySelectorAll('#cmp-mode-pills .cmp-pill')) {
+    pill.classList.toggle('active', pill.dataset.cmpMode === S.compare.mode);
+  }
+  for (const btn of document.querySelectorAll('#cmp-layout-btns .cmp-icon-btn')) {
+    btn.classList.toggle('active', btn.dataset.cmpLayout === S.compare.layout);
+  }
+  const syncBtn = $('#btn-cmp-sync');
+  if (syncBtn) syncBtn.classList.toggle('active', S.compare.syncZoomPan);
+}
+
+/* 同上：只同步槽位的激活态与收藏态，不重建 DOM */
+function syncSlotChrome() {
+  for (const slot of document.querySelectorAll('#compare-split-stage .compare-slot')) {
+    const idx = +slot.dataset.idx;
+    const item = S.compare.items[idx];
+    if (!item) continue;
+    slot.classList.toggle('active', idx === S.compare.curSlot);
+    const favBtn = slot.querySelector('.slot-btn.fav');
+    if (favBtn) favBtn.classList.toggle('active', item.state === 'fav');
+  }
+  syncCompareFilmstrip();
+}
+
+function renderCompare() {
+  if (S.mode !== 'compare') return;
+
+  updateCompareDock();
+
+  const splitStage = $('#compare-split-stage');
+  const curtainStage = $('#compare-curtain-stage');
+  const blinkStage = $('#compare-blink-stage');
+
+  if (S.compare.mode === 'split') {
+    splitStage.hidden = false;
+    curtainStage.hidden = true;
+    blinkStage.hidden = true;
+    renderSplitCompare();
+  } else if (S.compare.mode === 'curtain') {
+    splitStage.hidden = true;
+    curtainStage.hidden = false;
+    blinkStage.hidden = true;
+    renderCurtainCompare();
+  } else if (S.compare.mode === 'blink') {
+    splitStage.hidden = true;
+    curtainStage.hidden = true;
+    blinkStage.hidden = false;
+    renderBlinkCompare();
+  }
+}
+
+/* ---------- 分屏渲染与视口联动 ---------- */
+function renderSplitCompare() {
+  const stage = $('#compare-split-stage');
+  stage.className = `compare-split-stage layout-${S.compare.layout}`;
+  stage.innerHTML = '';
+
+  S.compare.items.forEach((item, idx) => {
+    const slot = el('div', 'compare-slot' + (idx === S.compare.curSlot ? ' active' : ''));
+    slot.dataset.idx = idx;
+
+    // 头部信息栏
+    const header = el('div', 'slot-header');
+
+    const badgeGroup = el('div', 'slot-badge-group');
+    const numBadge = el('div', 'slot-num');
+    numBadge.textContent = idx + 1;
+    const nameSpan = el('div', 'slot-name');
+    nameSpan.textContent = item.name;
+    nameSpan.title = item.name;
+    const tagSpan = el('div', 'slot-tag');
+    tagSpan.textContent = item.ext;
+    badgeGroup.append(numBadge, nameSpan, tagSpan);
+
+    const exifPill = el('div', 'slot-exif-pill');
+    exifPill.innerHTML = '<span>载入参数…</span>';
+
+    const actions = el('div', 'slot-actions');
+
+    // 收藏按钮
+    const btnFav = el('button', 'slot-btn fav' + (item.state === 'fav' ? ' active' : ''));
+    btnFav.title = '标记收藏 (F)';
+    btnFav.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
+    btnFav.onclick = (e) => {
+      e.stopPropagation();
+      toggleSlotFav(idx);
+    };
+
+    // 独立联动锁
+    const btnLock = el('button', 'slot-btn lock' + (item.locked ? '' : ' unlocked'));
+    btnLock.title = item.locked ? '参与全局联动 (已锁定)' : '单独微调视角 (已解锁)';
+    btnLock.innerHTML = item.locked
+      ? '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
+      : '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>';
+    btnLock.onclick = (e) => {
+      e.stopPropagation();
+      item.locked = !item.locked;
+      btnLock.classList.toggle('unlocked', !item.locked);
+      btnLock.title = item.locked ? '参与全局联动 (已锁定)' : '单独微调视角 (已解锁)';
+      btnLock.innerHTML = item.locked
+        ? '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
+        : '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>';
+      toast(item.locked ? `槽位 ${idx + 1} 已加入全局联动` : `槽位 ${idx + 1} 已解除联动（可独立平移缩放）`);
+    };
+
+    // 胜出裁决 (Winner)
+    const btnWin = el('button', 'slot-btn winner');
+    btnWin.title = '胜出裁决：选定此张并退出对比 (W)';
+    btnWin.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.45 1-1 1H7"/><path d="M14 14.66V17c0 .55.45 1 1 1h2"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2z"/></svg>';
+    btnWin.onclick = (e) => {
+      e.stopPropagation();
+      pickCompareWinner(idx);
+    };
+
+    // 移除槽位
+    const btnDel = el('button', 'slot-btn del');
+    btnDel.title = '从对比中移除 (Del)';
+    btnDel.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+    btnDel.onclick = (e) => {
+      e.stopPropagation();
+      removeFromCompare(idx);
+    };
+
+    actions.append(btnFav, btnLock, btnWin, btnDel);
+    header.append(badgeGroup, exifPill, actions);
+    slot.appendChild(header);
+
+    // 视口区域
+    const viewport = el('div', 'slot-viewport');
+    const img = el('img');
+    img.draggable = false;
+    viewport.appendChild(img);
+
+    const zoomTag = el('div', 'slot-zoom-tag');
+    zoomTag.hidden = true;
+    viewport.appendChild(zoomTag);
+
+    const loading = el('div', 'slot-loading');
+    loading.innerHTML = '<div class="spinner-ring"></div><span>加载高清预览…</span>';
+    viewport.appendChild(loading);
+
+    slot.appendChild(viewport);
+    stage.appendChild(slot);
+
+    // 点击激活槽位（视口内部的点击交给 pointerup 判定 —— 那边要区分拖拽和单击）
+    slot.onclick = (e) => {
+      if (e.target && e.target.closest && e.target.closest('.slot-viewport')) return;
+      S.compare.curSlot = idx;
+      syncSlotChrome();
+    };
+
+    // 载入大图
+    loadFull(item.primary).then((rec) => {
+      if (!slot.isConnected) return;
+      loading.remove();
+      if (rec.error) {
+        exifPill.innerHTML = '<span style="color:var(--del)">读取失败</span>';
+        return;
+      }
+      item.meta = { orientation: rec.o, width: rec.w, height: rec.h, exif: rec.exif, fileSize: rec.fileSize };
+      item.o = rec.o || 1;
+      item.srcW = rec.w || 0;
+      item.srcH = rec.h || 0;
+
+      // 渲染 EXIF 胶囊
+      renderSlotExif(exifPill, rec.exif);
+
+      img.src = rec.url;
+      img.onload = () => {
+        img.classList.add('loaded');
+        layoutSlot(item, slot);
+      };
+      if (img.complete && img.naturalWidth) {
+        img.classList.add('loaded');
+        layoutSlot(item, slot);
+      }
+    });
+
+    // 视口交互：滚轮与平移
+    bindSlotViewportEvents(item, slot, idx);
+  });
+}
+
+function renderSlotExif(pillEl, exif) {
+  if (!exif) {
+    pillEl.innerHTML = '<span>无 EXIF</span>';
+    return;
+  }
+  const parts = [];
+  if (exif.aperture) parts.push(`<b>${escapeHtml(exif.aperture)}</b>`);
+  if (exif.shutter) parts.push(`<b>${escapeHtml(exif.shutter)}</b>`);
+  if (exif.iso) parts.push(`<b>${escapeHtml(exif.iso)}</b>`);
+  if (exif.focal) parts.push(`<b>${escapeHtml(exif.focal)}</b>`);
+  pillEl.innerHTML = parts.length ? parts.join(' · ') : '<span>已就绪</span>';
+}
+
+function bindSlotViewportEvents(item, slot, idx) {
+  const vp = slot.querySelector('.slot-viewport');
+  const img = slot.querySelector('img');
+
+  // 滚轮缩放
+  vp.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      const factor = Math.exp(-e.deltaY * 0.0018);
+      zoomSlot(idx, factor, e.clientX, e.clientY);
+    },
+    { passive: false }
+  );
+
+  // 指针拖拽平移
+  let drag = null;
+  vp.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    drag = { x: e.clientX, y: e.clientY, moved: false };
+    vp.setPointerCapture(e.pointerId);
+  });
+
+  vp.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    const dy = e.clientY - drag.y;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.moved = true;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    panSlot(idx, dx, dy);
+  });
+
+  const endDrag = () => {
+    drag = null;
+    // panSlot 是给「所有联动槽位」都加上 panning 的，收尾时也要全部清掉，
+    // 只清自己的话其余槽位会一直停在 grabbing 光标上
+    for (const s of document.querySelectorAll('.compare-slot')) s.classList.remove('panning');
+  };
+
+  vp.addEventListener('pointerup', () => {
+    if (drag && !drag.moved) {
+      // 单击切换当前槽位
+      S.compare.curSlot = idx;
+      syncSlotChrome();
+    }
+    endDrag();
+  });
+  // 指针被系统取消（例如触控被手势接管）时也要收尾，否则 drag 会一直挂着
+  vp.addEventListener('pointercancel', endDrag);
+
+  // 双击 1:1 放大切换
+  vp.ondblclick = () => {
+    img.classList.add('smooth');
+    const targetZoom = item.zoom === 1 ? 1 / Math.max(0.01, item.fit || 1) : 1;
+    setSlotZoom(idx, targetZoom);
+    setTimeout(() => img.classList.remove('smooth'), 200);
+  };
+}
+
+const compareSlotEl = (i) => document.querySelector(`.compare-slot[data-idx="${i}"]`);
+
+function layoutSlot(item, slot) {
+  const img = slot.querySelector('img');
+  const vp = slot.querySelector('.slot-viewport');
+  if (!img || !vp) return;
+
+  const o = item.o || 1;
+  const nw = item.srcW || img.naturalWidth;
+  const nh = item.srcH || img.naturalHeight;
+  if (!nw || !nh) return;
+
+  item.natW = nw;
+  item.natH = nh;
+  const sw = swapped(o) ? nh : nw;
+  const sh = swapped(o) ? nw : nh;
+
+  const box = vp.getBoundingClientRect();
+  const pad = 24;
+  const fit = Math.min((box.width - pad) / Math.max(1, sw), (box.height - pad) / Math.max(1, sh));
+  item.fit = fit > 0 ? fit : 0.01;
+
+  img.style.width = nw * item.fit + 'px';
+  img.style.height = nh * item.fit + 'px';
+  // 窗口尺寸变了之后旧的 pan 可能已经越界，重排时必须重新夹一次
+  clampSlotPan(item, slot);
+  applySlotTransform(item, slot);
+}
+
+function applySlotTransform(item, slot) {
+  const img = slot.querySelector('img');
+  const zoomTag = slot.querySelector('.slot-zoom-tag');
+  if (!img) return;
+
+  const { zoom, panX, panY, o } = item;
+  const mir = mirrored(o) ? ' scaleX(-1)' : '';
+  img.style.transform = `translate(-50%,-50%) translate(${panX}px,${panY}px) scale(${zoom}) rotate(${rotDeg(o)}deg)${mir}`;
+
+  slot.classList.toggle('zoomed', zoom > 1);
+  if (zoomTag) {
+    if (zoom !== 1) {
+      zoomTag.hidden = false;
+      zoomTag.textContent = `${Math.round(item.fit * zoom * 100)}%`;
+    } else {
+      zoomTag.hidden = true;
+    }
+  }
+}
+
+/* 通用平移夹取：把图片摆正并缩放后算出屏幕尺寸，不让它整个被拖出视口 */
+function clampItemPan(item, vp, margin = 30) {
+  if (!vp) return;
+  const { zoom, fit, natW, natH, o } = item;
+  if (!natW || !natH) return;
+  const sw = (swapped(o) ? natH : natW) * fit * zoom;
+  const sh = (swapped(o) ? natW : natH) * fit * zoom;
+  const box = vp.getBoundingClientRect();
+  const mx = Math.max(0, (sw - box.width) / 2 + margin);
+  const my = Math.max(0, (sh - box.height) / 2 + margin);
+  item.panX = Math.max(-mx, Math.min(mx, item.panX));
+  item.panY = Math.max(-my, Math.min(my, item.panY));
+}
+
+function clampSlotPan(item, slot) {
+  clampItemPan(item, slot && slot.querySelector('.slot-viewport'));
+}
+
+/* 视口联动要作用到哪几个槽位。
+   关键：源槽位自己解锁时只动它自己 —— 「解锁单图微调」的语义是把这张从联动里摘出来，
+   而不是拿它去推别人。写成无条件收集 locked 槽位的话，解锁后滚轮会动所有别的图，
+   唯独手底下这张纹丝不动，正好反了。纯函数，便于单测。 */
+function syncTargets(items, idx, syncOn) {
+  const src = items && items[idx];
+  if (!src) return [];
+  if (!syncOn || !src.locked) return [idx];
+  const out = [];
+  for (let i = 0; i < items.length; i++) {
+    if (items[i] && items[i].locked) out.push(i);
+  }
+  return out;
+}
+
+/* 把光标锚点归一化成「相对视口中心的比例」。
+   各槽位视口大小可能不同（3 屏布局主图更大），按比例映射才能让联动的几张
+   缩放时锚住同一个相对位置，否则源图绕光标、其余绕中心，滚两下焦点就散了。 */
+function slotAnchor(idx, cx, cy) {
+  if (cx == null || cy == null) return null;
+  const slot = compareSlotEl(idx);
+  const vp = slot && slot.querySelector('.slot-viewport');
+  if (!vp) return null;
+  const b = vp.getBoundingClientRect();
+  if (!b.width || !b.height) return null;
+  return { fx: (cx - (b.left + b.width / 2)) / b.width, fy: (cy - (b.top + b.height / 2)) / b.height };
+}
+
+function zoomSlot(idx, factor, cx, cy) {
+  const anchor = slotAnchor(idx, cx, cy);
+
+  for (const t of syncTargets(S.compare.items, idx, S.compare.syncZoomPan)) {
+    const it = S.compare.items[t];
+    const slot = compareSlotEl(t);
+    const vp = slot && slot.querySelector('.slot-viewport');
+    if (!it || !vp) continue;
+
+    const oldZ = it.zoom || 1;
+    const newZ = Math.max(1, Math.min(24, oldZ * factor));
+    it.zoom = newZ;
+
+    if (newZ === 1) {
+      it.panX = 0;
+      it.panY = 0;
+    } else if (anchor) {
+      const box = vp.getBoundingClientRect();
+      const ax = anchor.fx * box.width;
+      const ay = anchor.fy * box.height;
+      it.panX = ax - ((ax - it.panX) * newZ) / oldZ;
+      it.panY = ay - ((ay - it.panY) * newZ) / oldZ;
+    }
+
+    clampSlotPan(it, slot);
+    applySlotTransform(it, slot);
+  }
+}
+
+function setSlotZoom(idx, targetZoom) {
+  for (const t of syncTargets(S.compare.items, idx, S.compare.syncZoomPan)) {
+    const it = S.compare.items[t];
+    const slot = compareSlotEl(t);
+    if (!it || !slot) continue;
+
+    it.zoom = Math.max(1, Math.min(24, targetZoom));
+    if (it.zoom === 1) {
+      it.panX = 0;
+      it.panY = 0;
+    }
+    clampSlotPan(it, slot);
+    applySlotTransform(it, slot);
+  }
+}
+
+function panSlot(idx, dx, dy) {
+  for (const t of syncTargets(S.compare.items, idx, S.compare.syncZoomPan)) {
+    const it = S.compare.items[t];
+    const slot = compareSlotEl(t);
+    if (!it || !slot || it.zoom <= 1) continue;
+
+    slot.classList.add('panning');
+    it.panX += dx;
+    it.panY += dy;
+    clampSlotPan(it, slot);
+    applySlotTransform(it, slot);
+  }
+}
+
+/* 1:1 焦点对齐。zoom 是各自 fit 之上的倍率，而 fit 按各自像素尺寸算 ——
+   所以要真的「都是 100%」，必须每张各自取 1/fit，不能共用一个 zoom 值。 */
+function sync100() {
+  if (S.compare.mode === 'split') {
+    const allZoomed = S.compare.items.every((it) => it.zoom > 1);
+    for (let i = 0; i < S.compare.items.length; i++) {
+      const it = S.compare.items[i];
+      const slot = compareSlotEl(i);
+      if (!slot) continue;
+      const img = slot.querySelector('img');
+      if (img) img.classList.add('smooth');
+      it.zoom = allZoomed ? 1 : 1 / Math.max(0.01, it.fit);
+      if (it.zoom === 1) {
+        it.panX = 0;
+        it.panY = 0;
+      }
+      clampSlotPan(it, slot);
+      applySlotTransform(it, slot);
+      if (img) setTimeout(() => img.classList.remove('smooth'), 200);
+    }
+    toast(allZoomed ? '已重置为适应屏幕' : '已全部 100% (1:1) 焦点对齐放大');
+    return;
+  }
+
+  // 卷帘 / 闪烁：两张共用同一个 zoom 和同一组 pan，一起切。
+  // 1:1 的基准取「当前实际显示的那张」—— 闪烁模式下 A/B 的 fit 是各自算的
+  const base = pairFitBase();
+  if (!base) return;
+  const back = base.zoom > 1;
+  const z = back ? 1 : 1 / Math.max(0.01, base.fit || 1);
+  for (const it of [S.compare.items[0], S.compare.items[1]]) {
+    if (!it) continue;
+    it.zoom = z;
+    if (back) {
+      it.panX = 0;
+      it.panY = 0;
+    }
+  }
+  if (S.compare.mode === 'curtain') applyCurtainTransform();
+  else applyBlinkTransform();
+  toast(back ? '已重置为适应屏幕' : '已 100% (1:1) 焦点对齐放大');
+}
+
+function resetCompareFit() {
+  for (let i = 0; i < S.compare.items.length; i++) {
+    const it = S.compare.items[i];
+    it.zoom = 1;
+    it.panX = 0;
+    it.panY = 0;
+    const slot = compareSlotEl(i);
+    if (slot) applySlotTransform(it, slot);
+  }
+  if (S.compare.mode === 'curtain') applyCurtainTransform();
+  else if (S.compare.mode === 'blink') applyBlinkTransform();
+  toast('已全部重置为适应屏幕');
+}
+
+/* 窗口尺寸变化后重新计算 fit —— 三种模式的 layout 都只在 img.onload 里跑过一次 */
+function relayoutCompare() {
+  if (S.mode !== 'compare') return;
+  if (S.compare.mode === 'split') {
+    for (let i = 0; i < S.compare.items.length; i++) {
+      const slot = compareSlotEl(i);
+      if (slot) layoutSlot(S.compare.items[i], slot);
+    }
+  } else if (S.compare.mode === 'curtain') {
+    layoutCurtainImages();
+  } else {
+    layoutBlinkImage();
+  }
+}
+
+/* ---------- 卷帘对比渲染 ---------- */
+function renderCurtainCompare() {
+  if (S.compare.items.length < 2) {
+    toast('卷帘对比需要至少 2 张照片', { err: true });
+    S.compare.mode = 'split';
+    renderCompare();
+    return;
+  }
+  const itemA = S.compare.items[0];
+  const itemB = S.compare.items[1];
+
+  $('#curtain-badge-a').textContent = `A · ${itemA.name}`;
+  $('#curtain-badge-b').textContent = `B · ${itemB.name}`;
+
+  const imgA = $('#curtain-img-a');
+  const imgB = $('#curtain-img-b');
+  const box = $('#curtain-box');
+  const divider = $('#curtain-divider');
+
+  box.style.setProperty('--split-x', `${Math.round(S.compare.curtainSplit * 100)}%`);
+
+  loadFull(itemA.primary).then((recA) => {
+    if (recA && !recA.error) {
+      itemA.o = recA.o || 1;
+      itemA.srcW = recA.w || 0;
+      itemA.srcH = recA.h || 0;
+      imgA.src = recA.url;
+      imgA.onload = () => layoutCurtainImages();
+    }
+  });
+
+  loadFull(itemB.primary).then((recB) => {
+    if (recB && !recB.error) {
+      itemB.o = recB.o || 1;
+      itemB.srcW = recB.w || 0;
+      itemB.srcH = recB.h || 0;
+      imgB.src = recB.url;
+      imgB.onload = () => layoutCurtainImages();
+    }
+  });
+
+  // 卷帘分割线拖动
+  let draggingDivider = false;
+  divider.onpointerdown = (e) => {
+    draggingDivider = true;
+    divider.setPointerCapture(e.pointerId);
+  };
+  divider.onpointermove = (e) => {
+    if (!draggingDivider) return;
+    const rect = box.getBoundingClientRect();
+    const pct = Math.max(0.05, Math.min(0.95, (e.clientX - rect.left) / rect.width));
+    S.compare.curtainSplit = pct;
+    box.style.setProperty('--split-x', `${(pct * 100).toFixed(2)}%`);
+  };
+  divider.onpointerup = divider.onpointercancel = () => (draggingDivider = false);
+
+  // 卷帘缩放与平移
+  box.onwheel = (e) => {
+    e.preventDefault();
+    setPairZoom(box, (itemA.zoom || 1) * Math.exp(-e.deltaY * 0.0018), e.clientX, e.clientY);
+    applyCurtainTransform();
+  };
+
+  let dragBox = null;
+  box.onpointerdown = (e) => {
+    if (e.target.closest('#curtain-divider')) return;
+    dragBox = { x: e.clientX, y: e.clientY };
+    box.classList.add('panning');
+    box.setPointerCapture(e.pointerId);
+  };
+  box.onpointermove = (e) => {
+    if (!dragBox || itemA.zoom <= 1) return;
+    const dx = e.clientX - dragBox.x;
+    const dy = e.clientY - dragBox.y;
+    dragBox.x = e.clientX;
+    dragBox.y = e.clientY;
+    itemA.panX += dx;
+    itemA.panY += dy;
+    clampItemPan(itemA, box);
+    itemB.panX = itemA.panX;
+    itemB.panY = itemA.panY;
+    applyCurtainTransform();
+  };
+  box.onpointerup = box.onpointercancel = () => {
+    dragBox = null;
+    box.classList.remove('panning');
+  };
+}
+
+function layoutCurtainImages() {
+  const box = $('#curtain-box');
+  const imgA = $('#curtain-img-a');
+  const imgB = $('#curtain-img-b');
+  const itemA = S.compare.items[0];
+  const itemB = S.compare.items[1];
+  if (!itemA || !itemB || !box) return;
+
+  const rect = box.getBoundingClientRect();
+  const nw = itemA.srcW || imgA.naturalWidth || 1000;
+  const nh = itemA.srcH || imgA.naturalHeight || 800;
+  const sw = swapped(itemA.o) ? nh : nw;
+  const sh = swapped(itemA.o) ? nw : nh;
+
+  const fit = Math.min((rect.width - 24) / sw, (rect.height - 24) / sh);
+  itemA.fit = fit > 0 ? fit : 0.01;
+  itemB.fit = itemA.fit;
+  // clampItemPan 要靠 natW/natH 算屏幕尺寸，卷帘这边也得填上
+  itemA.natW = nw;
+  itemA.natH = nh;
+  itemB.natW = nw;
+  itemB.natH = nh;
+
+  imgA.style.width = nw * itemA.fit + 'px';
+  imgA.style.height = nh * itemA.fit + 'px';
+  imgB.style.width = nw * itemA.fit + 'px';
+  imgB.style.height = nh * itemA.fit + 'px';
+
+  clampItemPan(itemA, box);
+  itemB.panX = itemA.panX;
+  itemB.panY = itemA.panY;
+  applyCurtainTransform();
+}
+
+function applyCurtainTransform() {
+  const imgA = $('#curtain-img-a');
+  const imgB = $('#curtain-img-b');
+  const itemA = S.compare.items[0];
+  const itemB = S.compare.items[1];
+  if (!itemA || !itemB) return;
+
+  const mirA = mirrored(itemA.o) ? ' scaleX(-1)' : '';
+  const mirB = mirrored(itemB.o) ? ' scaleX(-1)' : '';
+
+  imgA.style.transform = `translate(-50%,-50%) translate(${itemA.panX}px,${itemA.panY}px) scale(${itemA.zoom}) rotate(${rotDeg(itemA.o)}deg)${mirA}`;
+  imgB.style.transform = `translate(-50%,-50%) translate(${itemB.panX}px,${itemB.panY}px) scale(${itemB.zoom}) rotate(${rotDeg(itemB.o)}deg)${mirB}`;
+}
+
+/* 卷帘两张共用一个 fit（都按 A 算）；闪烁是各自 fit，基准取当前显示的那张 */
+const pairFitBase = () =>
+  (S.compare.mode === 'blink' ? S.compare.items[S.compare.blinkIndex] : null) || S.compare.items[0];
+
+/* 卷帘 / 闪烁：两张图共用一个容器、一组 zoom 与 pan，缩放锚到光标。
+   A 是基准，B 无条件跟随，保证两张始终严格重合 —— 否则重叠对比就没意义了。 */
+function setPairZoom(boxEl, z, cx, cy) {
+  const a = S.compare.items[0];
+  const b = S.compare.items[1];
+  if (!a || !boxEl) return;
+
+  const r = boxEl.getBoundingClientRect();
+  const ax = cx == null ? 0 : cx - (r.left + r.width / 2);
+  const ay = cy == null ? 0 : cy - (r.top + r.height / 2);
+  const oldZ = a.zoom || 1;
+  const nz = Math.max(1, Math.min(24, z));
+
+  a.zoom = nz;
+  if (nz === 1) {
+    a.panX = 0;
+    a.panY = 0;
+  } else {
+    a.panX = ax - ((ax - a.panX) * nz) / oldZ;
+    a.panY = ay - ((ay - a.panY) * nz) / oldZ;
+    clampItemPan(a, boxEl);
+  }
+  if (b) {
+    b.zoom = a.zoom;
+    b.panX = a.panX;
+    b.panY = a.panY;
+  }
+}
+
+function setPairPan(boxEl, dx, dy) {
+  const a = S.compare.items[0];
+  const b = S.compare.items[1];
+  if (!a || (a.zoom || 1) <= 1) return;
+  a.panX += dx;
+  a.panY += dy;
+  clampItemPan(a, boxEl);
+  if (b) {
+    b.panX = a.panX;
+    b.panY = a.panY;
+  }
+}
+
+/* ---------- A/B 闪烁对比渲染 ---------- */
+function renderBlinkCompare() {
+  if (S.compare.items.length < 2) {
+    toast('A/B 对比需要至少 2 张照片', { err: true });
+    S.compare.mode = 'split';
+    renderCompare();
+    return;
+  }
+  const itemA = S.compare.items[0];
+  const itemB = S.compare.items[1];
+  const curItem = S.compare.blinkIndex === 0 ? itemA : itemB;
+
+  $('#blink-tag-a').classList.toggle('active', S.compare.blinkIndex === 0);
+  $('#blink-tag-b').classList.toggle('active', S.compare.blinkIndex === 1);
+  $('#blink-tag-a').textContent = `A · ${itemA.name}`;
+  $('#blink-tag-b').textContent = `B · ${itemB.name}`;
+
+  const img = $('#blink-img');
+
+  // 另一张先预热进 fullCache，否则第一次按 Tab 要等一趟 IPC，谈不上「毫秒级交替」
+  const other = S.compare.blinkIndex === 0 ? itemB : itemA;
+  if (other && !fullCache.has(other.primary)) loadFull(other.primary);
+
+  loadFull(curItem.primary).then((rec) => {
+    if (rec && !rec.error) {
+      curItem.o = rec.o || 1;
+      curItem.srcW = rec.w || 0;
+      curItem.srcH = rec.h || 0;
+      img.onload = () => layoutBlinkImage();
+      img.src = rec.url;
+      if (img.complete && img.naturalWidth) layoutBlinkImage();
+    }
+  });
+
+  $('#blink-tag-a').onclick = () => {
+    S.compare.blinkIndex = 0;
+    renderBlinkCompare();
+  };
+  $('#blink-tag-b').onclick = () => {
+    S.compare.blinkIndex = 1;
+    renderBlinkCompare();
+  };
+}
+
+function applyBlinkTransform() {
+  const img = $('#blink-img');
+  const item = S.compare.items[S.compare.blinkIndex];
+  if (!img || !item) return;
+  const mir = mirrored(item.o) ? ' scaleX(-1)' : '';
+  img.style.transform = `translate(-50%,-50%) translate(${item.panX}px,${item.panY}px) scale(${item.zoom}) rotate(${rotDeg(item.o)}deg)${mir}`;
+}
+
+function layoutBlinkImage() {
+  const box = $('#blink-box');
+  const img = $('#blink-img');
+  const item = S.compare.items[S.compare.blinkIndex];
+  if (!item || !box || !img) return;
+
+  const rect = box.getBoundingClientRect();
+  const nw = item.srcW || img.naturalWidth || 1000;
+  const nh = item.srcH || img.naturalHeight || 800;
+  const sw = swapped(item.o) ? nh : nw;
+  const sh = swapped(item.o) ? nw : nh;
+
+  const fit = Math.min((rect.width - 24) / sw, (rect.height - 24) / sh);
+  item.fit = fit > 0 ? fit : 0.01;
+  item.natW = nw;
+  item.natH = nh;
+  img.style.width = nw * item.fit + 'px';
+  img.style.height = nh * item.fit + 'px';
+
+  clampItemPan(item, box);
+  applyBlinkTransform();
+}
+
+/* A/B 闪烁的用途就是揪微跑焦和眨眼 —— 放不到 100% 等于废掉，所以这里要有缩放和平移。
+   绑一次即可：renderBlinkCompare 每按一次 Tab 都会跑，在里面绑会把进行中的拖拽丢掉。 */
+function initBlinkInteractions() {
+  const box = $('#blink-box');
+  if (!box || !box.addEventListener) return;
+
+  box.addEventListener(
+    'wheel',
+    (e) => {
+      if (S.mode !== 'compare' || S.compare.mode !== 'blink') return;
+      e.preventDefault();
+      const a = S.compare.items[0];
+      if (!a) return;
+      setPairZoom(box, (a.zoom || 1) * Math.exp(-e.deltaY * 0.0018), e.clientX, e.clientY);
+      applyBlinkTransform();
+    },
+    { passive: false }
+  );
+
+  let drag = null;
+  const end = () => {
+    drag = null;
+    box.classList.remove('panning');
+  };
+
+  box.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest && e.target.closest('.blink-indicator')) return;
+    drag = { x: e.clientX, y: e.clientY, moved: false };
+    box.classList.add('panning');
+    box.setPointerCapture(e.pointerId);
+  });
+  box.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    const dy = e.clientY - drag.y;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.moved = true;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    setPairPan(box, dx, dy);
+    applyBlinkTransform();
+  });
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', end);
+
+  box.addEventListener('dblclick', () => {
+    if (S.mode !== 'compare' || S.compare.mode !== 'blink') return;
+    const base = pairFitBase();
+    if (!base) return;
+    setPairZoom(box, (base.zoom || 1) === 1 ? 1 / Math.max(0.01, base.fit || 1) : 1);
+    applyBlinkTransform();
+  });
+}
+
+function toggleBlink() {
+  if (S.compare.mode !== 'blink') {
+    S.compare.mode = 'blink';
+    renderCompare();
+    return;
+  }
+  S.compare.blinkIndex = S.compare.blinkIndex === 0 ? 1 : 0;
+  renderBlinkCompare();
+}
+
+/* ---------- 底部对比胶片条 ---------- */
+/* 和 #filmstrip 一样走懒加载：直接对整本相册调 getThumb 的话，
+   2000 张的文件夹一进对比就会把 worker 池塞满，正在加载的几张大图反而被拖死。 */
+const cmpStripObserver = new IntersectionObserver(
+  (entries) => {
+    for (const en of entries) {
+      if (!en.isIntersecting) continue;
+      const it = en.target;
+      cmpStripObserver.unobserve(it);
+      const p = it.dataset.primary;
+      if (!p) continue;
+      getThumb(p, () => !it.isConnected).then((u) => {
+        if (!u || !it.isConnected) return;
+        const img = it.querySelector('img');
+        if (!img) return;
+        img.src = u;
+        img.onload = () => img.classList.add('on');
+      });
+    }
+  },
+  { root: $('#compare-filmstrip'), rootMargin: '300px' }
+);
+
+function buildCompareFilmstrip() {
+  const stripEl = $('#compare-filmstrip');
+  stripEl.innerHTML = '';
+
+  const list = S.view.length ? S.view : S.compare.items;
+  list.forEach((g) => {
+    const it = el('div', 'cmp-fs-item');
+    it.dataset.primary = g.primary;
+
+    const inCmpIdx = S.compare.items.findIndex((item) => item.primary === g.primary);
+    if (inCmpIdx >= 0) {
+      it.classList.add('in-compare');
+      const badge = el('div', 'cmp-fs-badge');
+      badge.textContent = inCmpIdx + 1;
+      it.appendChild(badge);
+    }
+    if (inCmpIdx === S.compare.curSlot) it.classList.add('cur-slot');
+
+    const img = el('img');
+    it.appendChild(img);
+
+    it.onclick = () => {
+      // 索引必须点击时现算：加/减槽位之后闭包里捕获的那个早就过期了
+      const cur = S.compare.items.findIndex((item) => item.primary === g.primary);
+      if (cur >= 0) {
+        S.compare.curSlot = cur;
+        syncSlotChrome();
+        return;
+      }
+      if (S.compare.items.length < 6) {
+        S.compare.items.push(makeCompareItem(g));
+        S.compare.curSlot = S.compare.items.length - 1;
+      } else {
+        S.compare.items[S.compare.curSlot] = makeCompareItem(g);
+      }
+      autoCompareLayout();
+      renderCompare();
+      buildCompareFilmstrip();
+    };
+
+    stripEl.appendChild(it);
+    if (cmpStripObserver.observe) cmpStripObserver.observe(it);
+  });
+}
+
+function syncCompareFilmstrip() {
+  const stripEl = $('#compare-filmstrip');
+  for (const it of stripEl.children) {
+    const p = it.dataset.primary;
+    const inCmpIdx = S.compare.items.findIndex((item) => item.primary === p);
+    it.classList.toggle('in-compare', inCmpIdx >= 0);
+    it.classList.toggle('cur-slot', inCmpIdx === S.compare.curSlot);
+    const badge = it.querySelector('.cmp-fs-badge');
+    if (inCmpIdx >= 0) {
+      if (!badge) {
+        const b = el('div', 'cmp-fs-badge');
+        b.textContent = inCmpIdx + 1;
+        it.appendChild(b);
+      } else {
+        badge.textContent = inCmpIdx + 1;
+      }
+    } else if (badge) {
+      badge.remove();
+    }
+  }
+}
+
+/* ---------- 槽位操作 ---------- */
+function toggleSlotFav(idx) {
+  const item = S.compare.items[idx];
+  if (!item) return;
+  // 外部拖进来的照片不属于当前相册，saveSession 靠 S.root + S.all 落盘，收藏无处可写 ——
+  // 与其弹一句骗人的「已收藏」，不如直说
+  const g = S.all.find((x) => x.primary === item.primary || x.id === item.id);
+  if (!g) {
+    toast(`「${item.name}」不在当前相册中，收藏无法保存`, { err: true });
+    return;
+  }
+  if (g.state === 'del') {
+    toast('这张已经在回收站里了');
+    return;
+  }
+
+  if (g.state === 'fav') {
+    g.state = 'none';
+    S.undo.push({ kind: 'unfav', g });
+    toast(`已取消收藏 · ${item.name}`);
+  } else {
+    g.state = 'fav';
+    S.undo.push({ kind: 'fav', g });
+    toast(`★ 已收藏 · ${item.name}`);
+  }
+  item.state = g.state;
+
+  saveSession();
+  syncSlotChrome();
+  updateCounts();
+}
+
+function pickCompareWinner(idx) {
+  const item = S.compare.items[idx];
+  if (!item) return;
+  // 必须先把 curSlot 指到胜出者：closeCompare 是按 curSlot 回定位 S.cur 的，
+  // 不然在槽位 0 激活时点槽位 2 的奖杯，最后打开的会是槽位 0 那张
+  S.compare.curSlot = idx;
+  toast(`👑 胜出裁决：已选择「${item.name}」`);
+  if (item.state !== 'fav') toggleSlotFav(idx);
+  // 胜出者在相册里就直接进大图细看，否则按原来的视图退
+  if (S.view.some((g) => g.primary === item.primary || g.id === item.id)) S.compare.prevMode = 'loupe';
+  closeCompare(); // 内部已经会回 loupe / grid，外面不要再调一次
+}
+
+function removeFromCompare(idx) {
+  if (S.compare.items.length <= 1) {
+    toast('至少保留 1 张对比照片');
+    return;
+  }
+  const removed = S.compare.items.splice(idx, 1)[0];
+  S.compare.curSlot = Math.max(0, Math.min(S.compare.curSlot, S.compare.items.length - 1));
+  S.compare.layout = canonicalLayout(S.compare.items.length);
+
+  renderCompare();
+  buildCompareFilmstrip();
+  toast(`已移出对比 · ${removed.name}`);
+}
+
+function replaceCompareSlot(idx, newPath) {
+  S.compare.items[idx] = makeCompareItem(newPath);
+  S.compare.curSlot = idx;
+  renderCompare();
+  buildCompareFilmstrip();
+  toast(`槽位 ${idx + 1} 已替换为 ${newPath.split(/[\\/]/).pop()}`);
+}
+
+function addSlotFromAlbum() {
+  if (S.compare.items.length >= 6) {
+    toast('最多支持同时对比 6 张照片');
+    return;
+  }
+  // 从未在对比池中的相册照片中追加一张
+  const nextItem = S.view.find((g) => !S.compare.items.some((it) => it.primary === g.primary));
+  if (nextItem) {
+    S.compare.items.push(makeCompareItem(nextItem));
+    S.compare.curSlot = S.compare.items.length - 1;
+    autoCompareLayout();
+    renderCompare();
+    buildCompareFilmstrip();
+    toast(`已添加对比照片 · ${nextItem.name}`);
+  } else {
+    toast('可通过底部胶片条或从文件夹直接拖入新照片添加对比');
+  }
+}
+
+/* 把一张照片塞进对比池：没满就追加，满了就替换当前槽位 */
+function pushCompareItem(gOrPath) {
+  if (S.compare.items.length < 6) {
+    S.compare.items.push(makeCompareItem(gOrPath));
+    S.compare.curSlot = S.compare.items.length - 1;
+  } else {
+    S.compare.items[S.compare.curSlot] = makeCompareItem(gOrPath);
+  }
+  autoCompareLayout();
 }
 
 /* ============ 大图 ============ */
@@ -1101,6 +2244,69 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
+  // 对比模式专属快捷键
+  if (S.mode === 'compare') {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      return closeCompare();
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      return toggleBlink();
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      return removeFromCompare(S.compare.curSlot);
+    }
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+
+    const k = e.key.toLowerCase();
+    switch (k) {
+      case 'c':
+        e.preventDefault();
+        return closeCompare();
+      case 's':
+        e.preventDefault();
+        S.compare.syncZoomPan = !S.compare.syncZoomPan;
+        updateCompareDock();
+        toast(S.compare.syncZoomPan ? '🔗 已开启全局视口同步联动' : '🔓 已关闭视口联动（各槽位独立控制）');
+        return;
+      case 'z':
+        e.preventDefault();
+        return sync100();
+      case 'w':
+        e.preventDefault();
+        return pickCompareWinner(S.compare.curSlot);
+      case 'f':
+        e.preventDefault();
+        return toggleSlotFav(S.compare.curSlot);
+      case 'x':
+      case 'd':
+        e.preventDefault();
+        return removeFromCompare(S.compare.curSlot);
+      case '1':
+      case '2':
+      case '3':
+      case '4':
+      case '5':
+      case '6': {
+        // 必须包一层块作用域：switch 里裸放 const 是全 switch 共享的，
+        // 以后谁加一条 fallthrough 就是 TDZ 报错
+        const slotIdx = parseInt(k, 10) - 1;
+        if (slotIdx >= 0 && slotIdx < S.compare.items.length) {
+          e.preventDefault();
+          S.compare.curSlot = slotIdx;
+          syncSlotChrome();
+        }
+        return;
+      }
+      case 't':
+        e.preventDefault();
+        return toggleTheme();
+    }
+    return;
+  }
+
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     return actUndo();
@@ -1131,6 +2337,7 @@ document.addEventListener('keydown', (e) => {
     case 'Delete': case 'Backspace': e.preventDefault(); return actDelete();
   }
   switch (k.toLowerCase()) {
+    case 'c': e.preventDefault(); return openCompare();
     case 'f': e.preventDefault(); return actFavorite();
     case 'x': e.preventDefault(); return actDelete();
     case 'd': e.preventDefault(); return actDelete();
@@ -1153,34 +2360,85 @@ document.addEventListener('keydown', (e) => {
 });
 
 /* ============ 拖拽 ============ */
+/* Tauri 开了 dragDropEnabled 之后 webview 的原生 HTML5 拖放被接管，
+   桥接层把事件直接 dispatch 到 window（bubbles:false）—— 槽位上挂 drop 监听收不到任何东西，
+   所以「拖到某个槽位精准替换」只能靠落点坐标 + elementFromPoint 判定。 */
+function compareSlotAt(x, y) {
+  if (S.mode !== 'compare' || S.compare.mode !== 'split') return null;
+  if (x == null || y == null) return null;
+  if (typeof document.elementFromPoint !== 'function') return null;
+  const t = document.elementFromPoint(x, y);
+  return (t && t.closest && t.closest('.compare-slot')) || null;
+}
+
+function markCompareDropTarget(slot) {
+  for (const s of document.querySelectorAll('.compare-slot')) s.classList.toggle('drop-target', s === slot);
+}
+
 let dragDepth = 0;
 window.addEventListener('dragenter', (e) => {
   e.preventDefault();
-  if (++dragDepth === 1 && e.dataTransfer.types.includes('Files')) $('#drop-overlay').hidden = false;
+  if (++dragDepth !== 1) return;
+  if (!e.dataTransfer || !e.dataTransfer.types.includes('Files')) return;
+  // 对比模式下不盖全屏蒙版：那层 backdrop blur 会把槽位高亮整个糊掉，
+  // 看不见拖到了哪个槽位就谈不上「精准替换」
+  if (S.mode !== 'compare') $('#drop-overlay').hidden = false;
 });
 window.addEventListener('dragover', (e) => {
   e.preventDefault();
-  e.dataTransfer.dropEffect = 'copy';
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  markCompareDropTarget(compareSlotAt(e.clientX, e.clientY));
 });
 window.addEventListener('dragleave', (e) => {
   e.preventDefault();
   if (--dragDepth <= 0) {
     dragDepth = 0;
     $('#drop-overlay').hidden = true;
+    markCompareDropTarget(null);
   }
 });
 window.addEventListener('drop', async (e) => {
   e.preventDefault();
   dragDepth = 0;
   $('#drop-overlay').hidden = true;
+  const dropSlot = compareSlotAt(e.clientX, e.clientY);
+  markCompareDropTarget(null);
+
   const files = [...(e.dataTransfer.files || [])];
   if (!files.length) return;
   const paths = files.map((f) => window.pv.pathForFile(f)).filter(Boolean);
   if (!paths.length) return;
+
   for (const p of paths) {
     if (await window.pv.isDirectory(p)) return openFolder(p);
   }
-  // 拖进来的是文件 → 打开它所在的目录
+
+  // 单张落在某个槽位上 → 精准替换该槽位；多张则走下面的入池逻辑
+  if (dropSlot && paths.length === 1) return replaceCompareSlot(+dropSlot.dataset.idx, paths[0]);
+
+  // 已经在对比里 → 往对比池里加，而不是把整组换掉
+  if (S.mode === 'compare') {
+    const room = 6 - S.compare.items.length;
+    if (room <= 0) {
+      toast('对比池已满（最多 6 张），可把照片拖到某个槽位上替换');
+      return;
+    }
+    const added = paths.slice(0, room);
+    for (const p of added) pushCompareItem(p);
+    renderCompare();
+    buildCompareFilmstrip();
+    toast(
+      added.length < paths.length
+        ? `已加入 ${added.length} 张，对比最多 6 张`
+        : `已载入对比照片 · 共 ${S.compare.items.length} 张`
+    );
+    return;
+  }
+
+  // 拖入多张照片（2 张及以上）→ 直接进入细节对比工作台！
+  if (paths.length >= 2) return openCompare(paths);
+
+  // 单张照片且非对比模式 → 打开它所在的目录并定位
   const dir = paths[0].replace(/[\\/][^\\/]+$/, '');
   await openFolder(dir);
   const i = S.view.findIndex((g) => g.files.some((f) => f.toLowerCase() === paths[0].toLowerCase()));
@@ -1195,6 +2453,7 @@ $('#btn-choose').onclick = async () => openFolder(await window.pv.openFolderDial
 $('#btn-open').onclick = async () => openFolder(await window.pv.openFolderDialog());
 $('#btn-refresh').onclick = refreshFolder;
 $('#btn-grid').onclick = () => (S.mode === 'grid' ? showLoupe() : showGrid());
+$('#btn-compare').onclick = toggleCompare;
 $('#btn-theme').onclick = toggleTheme;
 $('#btn-help').onclick = () => ($('#help-modal').hidden = false);
 $('#btn-close-help').onclick = () => ($('#help-modal').hidden = true);
@@ -1208,6 +2467,30 @@ $('#btn-reveal').onclick = () => {
   if (g) window.pv.reveal(g.primary);
 };
 for (const b of document.querySelectorAll('#filters .chip')) b.onclick = () => applyFilter(b.dataset.filter);
+
+/* 对比工作台顶栏浮岛按钮绑定 */
+for (const pill of document.querySelectorAll('#cmp-mode-pills .cmp-pill')) {
+  pill.onclick = () => {
+    S.compare.mode = pill.dataset.cmpMode;
+    renderCompare();
+  };
+}
+for (const btn of document.querySelectorAll('#cmp-layout-btns .cmp-icon-btn')) {
+  btn.onclick = () => {
+    S.compare.layout = btn.dataset.cmpLayout;
+    renderCompare();
+  };
+}
+$('#btn-cmp-sync').onclick = () => {
+  S.compare.syncZoomPan = !S.compare.syncZoomPan;
+  updateCompareDock();
+  toast(S.compare.syncZoomPan ? '🔗 视口同步联动已开启' : '🔓 视口联动已关闭（独立微调）');
+};
+$('#btn-cmp-100').onclick = sync100;
+$('#btn-cmp-fit').onclick = resetCompareFit;
+$('#btn-cmp-add').onclick = addSlotFromAlbum;
+$('#btn-cmp-close').onclick = closeCompare;
+initBlinkInteractions();
 
 $('#zoom-grid').oninput = (e) => {
   S.settings.thumbSize = +e.target.value;
@@ -1262,8 +2545,32 @@ for (const btn of document.querySelectorAll('.modal-close-btn')) {
 
 /* ============ 启动 ============ */
 // 调试 / 自动化测试入口
-window.__pv = { S, openFolder, refreshFolder, showGrid, showLoupe, applyFilter, actFavorite, actDelete, actUndo, go, goTo, toggle100, toggleTheme, applyTheme,
-  _int: { getThumb, urlCache, inflight, queue, pool, fullCache, loadFull, get running() { return running; } } };
+window.__pv = {
+  S,
+  openFolder,
+  refreshFolder,
+  showGrid,
+  showLoupe,
+  openCompare,
+  closeCompare,
+  toggleCompare,
+  renderCompare,
+  relayoutCompare,
+  syncTargets,
+  canonicalLayout,
+  pickCompareWinner,
+  removeFromCompare,
+  applyFilter,
+  actFavorite,
+  actDelete,
+  actUndo,
+  go,
+  goTo,
+  toggle100,
+  toggleTheme,
+  applyTheme,
+  _int: { getThumb, urlCache, inflight, queue, pool, fullCache, loadFull, get running() { return running; } },
+};
 
 (async function init() {
   S.settings = await window.pv.getSettings();
@@ -1287,3 +2594,4 @@ window.__pv = { S, openFolder, refreshFolder, showGrid, showLoupe, applyFilter, 
     }
   }
 })();
+

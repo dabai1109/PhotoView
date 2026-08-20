@@ -1972,6 +1972,807 @@ kbd {
   background-clip: padding-box;
 }
 
-#filmstrip::-webkit-scrollbar {
+#filmstrip::-webkit-scrollbar,
+#compare-filmstrip::-webkit-scrollbar {
   height: 4px;
 }
+
+/* ==========================================================================
+   照片细节对比工作台 (Compare Studio)
+   ========================================================================== */
+#compare-view {
+  position: absolute;
+  inset: var(--topbar-h) 0 0 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-stage);
+  z-index: 40;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ---------- 顶部悬浮控制浮岛 (Compare Floating Dock) ---------- */
+/* 不脱离文档流：绝对定位 + left:50% 会让浮岛的 shrink-to-fit 宽度被卡在窗口的一半，
+   内容塞不下就被压扁、文字竖着换行；而且它不占位，舞台还得去猜要给它留多少 padding。
+   放回流里并 align-self:center，两个问题一起解决。 */
+.compare-dock {
+  position: relative;
+  z-index: 50;
+  align-self: center;
+  max-width: calc(100% - 24px);
+  margin: 14px 0 6px;
+  pointer-events: auto;
+  animation: slide-down-dock 0.24s var(--ease-smooth);
+}
+
+@keyframes slide-down-dock {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.compare-dock-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-dock);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-pill);
+  box-shadow: var(--shadow-dock);
+}
+
+/* 药丸和工具按钮都不许被压扁 —— 一压就竖着换行 */
+.compare-dock-group > * {
+  flex: 0 0 auto;
+}
+
+.compare-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: var(--accent);
+}
+
+.dock-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--line-normal);
+}
+
+/* 模式药丸按钮组 (Pill Segment) */
+.compare-mode-pills {
+  display: flex;
+  align-items: center;
+  background: var(--bg-filters);
+  padding: 2px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-subtle);
+  gap: 2px;
+}
+
+.cmp-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.cmp-pill:hover {
+  color: var(--fg-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.cmp-pill.active {
+  color: #ffffff;
+  background: var(--bg-btn-primary);
+  box-shadow: 0 2px 8px var(--accent-glow);
+}
+
+/* 布局按钮组 */
+.compare-layout-btns {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.cmp-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cmp-icon-btn:hover {
+  color: var(--fg-primary);
+  background: var(--bg-surface-hover);
+}
+
+.cmp-icon-btn.active {
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}
+
+/* 联动开关与快捷工具 */
+.cmp-btn-toggle,
+.cmp-btn-tool,
+.cmp-btn-close {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-subtle);
+  background: var(--bg-surface);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cmp-btn-toggle:hover,
+.cmp-btn-tool:hover {
+  color: var(--fg-primary);
+  background: var(--bg-surface-hover);
+  border-color: var(--line-strong);
+}
+
+.cmp-btn-toggle.active {
+  color: var(--accent-light);
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.z-label {
+  font-family: monospace;
+  font-weight: 700;
+  font-size: 10.5px;
+  padding: 1px 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: var(--r-xs);
+}
+
+.cmp-btn-close {
+  background: rgba(244, 63, 94, 0.1);
+  border-color: rgba(244, 63, 94, 0.25);
+  color: var(--del-light);
+}
+
+.cmp-btn-close:hover {
+  background: rgba(244, 63, 94, 0.2);
+  border-color: var(--del);
+  color: #ffffff;
+}
+
+/* ---------- 分屏对比舞台 (Compare Split Stage) ---------- */
+/* 浮岛现在自己占位，这里不用再留 padding 给它；min-height:0 让 flex 项能正常收缩 */
+.compare-split-stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+  padding: 4px 12px calc(var(--strip-h) + 12px) 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* 隐式行也要等分：布局按钮可以在任意张数下点击，
+   不加这条的话 2-col / 2-row 只声明了一行，多出来的槽位会被挤成 0 高再被 overflow 裁掉 */
+.compare-split-stage.layout-2-col {
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: 1fr;
+  grid-auto-rows: 1fr;
+}
+
+.compare-split-stage.layout-2-row {
+  grid-template-columns: 1fr;
+  grid-template-rows: repeat(2, 1fr);
+  grid-auto-rows: 1fr;
+}
+
+.compare-split-stage.layout-3-grid {
+  grid-template-columns: 1.2fr 0.8fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.compare-split-stage.layout-3-grid .compare-slot:first-child {
+  grid-row: 1 / span 2;
+}
+
+.compare-split-stage.layout-4-grid {
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+}
+
+.compare-split-stage.layout-6-grid {
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+}
+
+/* ---------- 槽位视口卡片 (.compare-slot) ---------- */
+.compare-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-canvas);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-subtle);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.compare-slot.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent), 0 0 20px var(--accent-glow);
+}
+
+.compare-slot.drop-target {
+  border-color: var(--fav);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+/* 槽位顶部悬浮信息条 */
+.slot-header {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.slot-header > * {
+  pointer-events: auto;
+}
+
+.slot-badge-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-glass-heavy);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  padding: 4px 8px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.slot-num {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+  font-size: 10.5px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.compare-slot.active .slot-num {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+.slot-name {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-primary);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slot-tag {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  background: var(--bg-chip-count);
+  color: var(--fg-secondary);
+  border: 1px solid var(--line-subtle);
+  letter-spacing: 0.2px;
+}
+
+/* 槽位 EXIF HUD 胶囊 */
+.slot-exif-pill {
+  font-size: 11px;
+  color: var(--fg-secondary);
+  background: var(--bg-glass-heavy);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: system-ui, -apple-system, sans-serif;
+  letter-spacing: 0.15px;
+}
+
+.slot-exif-pill b {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* 槽位操作按钮组 */
+.slot-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.slot-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-glass-heavy);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: var(--fg-secondary);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.slot-btn:hover {
+  color: var(--fg-primary);
+  background: var(--bg-surface-hover);
+  border-color: var(--accent);
+  transform: scale(1.08);
+}
+
+.slot-btn.fav.active {
+  color: var(--fav);
+  background: var(--fav-bg);
+  border-color: var(--fav-border);
+  box-shadow: 0 0 8px var(--fav-glow);
+}
+
+.slot-btn.lock.unlocked {
+  color: var(--fav);
+  background: var(--fav-bg);
+  border-color: var(--fav-border);
+}
+
+.slot-btn.winner:hover {
+  color: var(--fav);
+  background: var(--fav-bg);
+  border-color: var(--fav-border);
+  box-shadow: 0 0 10px var(--fav-glow);
+}
+
+.slot-btn.del:hover {
+  color: var(--del);
+  background: var(--del-bg);
+  border-color: var(--del-border);
+  box-shadow: 0 0 10px var(--del-glow);
+}
+
+/* 槽位视口画布/图片舞台 */
+.slot-viewport {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+
+.compare-slot.zoomed .slot-viewport {
+  cursor: grab;
+}
+
+.compare-slot.panning .slot-viewport {
+  cursor: grabbing;
+}
+
+/* 不要设 image-orientation：主进程在「图片自带 EXIF 方向标签」时返回 orientation:1，
+   并把 width/height 换成摆正后的尺寸，指望的就是浏览器默认的 from-image 自己转。
+   设成 none 会让相机竖拍 JPG 既躺倒又被压扁。#loupe-img 同理，也没有设。 */
+.slot-viewport img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center center;
+  will-change: transform;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+  opacity: 0;
+}
+
+.slot-viewport img.loaded {
+  opacity: 1;
+}
+
+.slot-viewport img.smooth {
+  transition: transform 0.16s var(--ease-smooth), opacity 0.18s ease;
+}
+
+/* 槽位放大倍率与加载指示 */
+.slot-zoom-tag {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 20;
+  font-size: 11px;
+  font-family: monospace;
+  font-weight: 700;
+  color: var(--fg-primary);
+  background: var(--bg-glass-heavy);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  padding: 3px 7px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-sm);
+  pointer-events: none;
+}
+
+.slot-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(4, 4, 6, 0.65);
+  z-index: 10;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+}
+
+/* ---------- 卷帘对比舞台 (.compare-curtain-stage) ---------- */
+.compare-curtain-stage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px calc(var(--strip-h) + 12px) 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.curtain-box {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-canvas);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-subtle);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  cursor: grab;
+}
+
+.curtain-box.panning {
+  cursor: grabbing;
+}
+
+.curtain-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.curtain-layer img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center center;
+  will-change: transform;
+  pointer-events: none;
+}
+
+.curtain-layer.layer-a {
+  z-index: 15;
+  clip-path: polygon(0 0, var(--split-x, 50%) 0, var(--split-x, 50%) 100%, 0 100%);
+}
+
+.curtain-layer.layer-b {
+  z-index: 10;
+}
+
+.curtain-badge {
+  position: absolute;
+  top: 14px;
+  z-index: 25;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  background: var(--bg-glass-heavy);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-sm);
+  pointer-events: none;
+}
+
+.curtain-badge.badge-a {
+  left: 14px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.curtain-badge.badge-b {
+  right: 14px;
+  background: var(--fav-bg);
+  color: var(--fav);
+  border-color: var(--fav-border);
+}
+
+/* 卷帘分割线与手柄 */
+.curtain-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--split-x, 50%);
+  width: 32px;
+  transform: translateX(-50%);
+  z-index: 30;
+  cursor: ew-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+
+.curtain-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ffffff;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.8), 0 0 4px var(--accent-glow);
+}
+
+.curtain-knob {
+  position: relative;
+  z-index: 35;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #ffffff;
+  color: #0d0d13;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  display: grid;
+  place-items: center;
+  transition: transform 0.12s ease;
+}
+
+.curtain-divider:hover .curtain-knob,
+.curtain-divider:active .curtain-knob {
+  transform: scale(1.12);
+  color: var(--accent);
+}
+
+/* ---------- A/B 闪烁对比舞台 (.compare-blink-stage) ---------- */
+.compare-blink-stage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px calc(var(--strip-h) + 12px) 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.blink-box {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-canvas);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-subtle);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+}
+
+.blink-box.panning {
+  cursor: grabbing;
+}
+
+.blink-box img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center center;
+  will-change: transform;
+  pointer-events: none;
+}
+
+.blink-indicator {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-dock);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  padding: 6px 14px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-dock);
+}
+
+.blink-tag {
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  color: var(--fg-secondary);
+  background: var(--bg-chip-count);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.blink-tag:hover {
+  color: var(--fg-primary);
+  background: var(--bg-surface-hover);
+}
+
+.blink-tag.blink-a.active {
+  color: #ffffff;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.blink-tag.blink-b.active {
+  color: #ffffff;
+  background: var(--fav);
+  border-color: var(--fav);
+  box-shadow: 0 0 10px var(--fav-glow);
+}
+
+.blink-tip {
+  font-size: 11px;
+  color: var(--fg-secondary);
+  border-left: 1px solid var(--line-normal);
+  padding-left: 8px;
+}
+
+.blink-tip kbd {
+  font-size: 10px;
+  padding: 1px 4px;
+  background: var(--bg-kbd);
+  border: 1px solid var(--kbd-border);
+  border-radius: 3px;
+  color: var(--fg-primary);
+}
+
+/* ---------- 底部对比胶片条 (.compare-filmstrip) ---------- */
+.compare-filmstrip {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--strip-h);
+  background: var(--bg-surface);
+  border-top: 1px solid var(--line-subtle);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  z-index: 35;
+}
+
+.cmp-fs-item {
+  position: relative;
+  flex: 0 0 68px;
+  height: 68px;
+  border-radius: var(--r-sm);
+  background: var(--bg-canvas);
+  border: 1.5px solid transparent;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.cmp-fs-item:hover {
+  transform: translateY(-2px);
+  border-color: var(--line-strong);
+}
+
+.cmp-fs-item.in-compare {
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.cmp-fs-item.cur-slot {
+  border-color: var(--fav);
+  box-shadow: 0 0 12px var(--fav-glow);
+}
+
+.cmp-fs-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.cmp-fs-item img.on {
+  opacity: 1;
+}
+
+.cmp-fs-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #000000;
+  font-size: 9.5px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+}
+

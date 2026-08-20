@@ -73,6 +73,15 @@
         </svg>
       </button>
 
+      <button class="icon-btn" id="btn-compare" title="细节对比工作台 (C)">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="8" height="18" rx="2"/>
+          <rect x="13" y="3" width="8" height="18" rx="2"/>
+          <circle cx="7" cy="8" r="1.2" fill="currentColor"/>
+          <circle cx="17" cy="8" r="1.2" fill="currentColor"/>
+        </svg>
+      </button>
+
       <div class="slider-wrap" title="缩略图大小">
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
         <input type="range" id="zoom-grid" min="120" max="420" step="10" />
@@ -228,6 +237,136 @@
   <div id="filmstrip"></div>
 </section>
 
+<!-- 照片细节对比工作台 (Compare Studio) -->
+<section id="compare-view" hidden>
+  <!-- 对比工具控制浮岛 -->
+  <div id="compare-dock" class="compare-dock">
+    <div class="compare-dock-group">
+      <div class="compare-title">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2">
+          <rect x="2" y="3" width="9" height="18" rx="2"/>
+          <rect x="13" y="3" width="9" height="18" rx="2"/>
+        </svg>
+        <span>细节对比</span>
+      </div>
+
+      <div class="dock-sep"></div>
+
+      <!-- 对比模式切换: 分屏 | 卷帘 | 闪烁 -->
+      <div class="compare-mode-pills" id="cmp-mode-pills">
+        <button class="cmp-pill active" data-cmp-mode="split" title="分屏并排对比">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="18" rx="1.5"/><rect x="13" y="3" width="8" height="18" rx="1.5"/></svg>
+          <span>分屏</span>
+        </button>
+        <button class="cmp-pill" data-cmp-mode="curtain" title="卷帘滑动对比 (两图重叠拉动分割线)">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/><polyline points="10 10 8 12 10 14"/><polyline points="14 10 16 12 14 14"/></svg>
+          <span>卷帘</span>
+        </button>
+        <button class="cmp-pill" data-cmp-mode="blink" title="A/B 闪烁对比 (按住 Tab 快速交替)">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 6 12 12 15 15"/></svg>
+          <span>A/B</span>
+        </button>
+      </div>
+
+      <div class="dock-sep"></div>
+
+      <!-- 分屏布局快速切换: 左右 / 上下 / 3屏 / 4屏 -->
+      <div class="compare-layout-btns" id="cmp-layout-btns">
+        <button class="cmp-icon-btn active" data-cmp-layout="2-col" title="左右双屏">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="8" height="16" rx="1.5"/><rect x="13" y="4" width="8" height="16" rx="1.5"/></svg>
+        </button>
+        <button class="cmp-icon-btn" data-cmp-layout="2-row" title="上下双屏">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="8" rx="1.5"/><rect x="4" y="13" width="16" height="8" rx="1.5"/></svg>
+        </button>
+        <button class="cmp-icon-btn" data-cmp-layout="3-grid" title="三屏 (1 主 2 副)">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="9" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="13" width="7" height="7" rx="1.5"/></svg>
+        </button>
+        <button class="cmp-icon-btn" data-cmp-layout="4-grid" title="2×2 四屏网格">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>
+        </button>
+        <button class="cmp-icon-btn" data-cmp-layout="6-grid" title="3×2 六屏网格">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="6" height="6" rx="1.2"/><rect x="9" y="5" width="6" height="6" rx="1.2"/><rect x="16" y="5" width="6" height="6" rx="1.2"/><rect x="2" y="13" width="6" height="6" rx="1.2"/><rect x="9" y="13" width="6" height="6" rx="1.2"/><rect x="16" y="13" width="6" height="6" rx="1.2"/></svg>
+        </button>
+      </div>
+
+      <div class="dock-sep"></div>
+
+      <!-- 视口联动锁定开关 -->
+      <button class="cmp-btn-toggle active" id="btn-cmp-sync" title="视口联动缩放与平移 (S)">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        <span>同步联动</span>
+      </button>
+
+      <!-- 100% 焦点对齐 -->
+      <button class="cmp-btn-tool" id="btn-cmp-100" title="100% 焦点对齐放大 (Z)">
+        <span class="z-label">1:1</span>
+        <span>焦点</span>
+      </button>
+
+      <!-- 适应屏幕重置 -->
+      <button class="cmp-btn-tool" id="btn-cmp-fit" title="适应屏幕">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+        <span>适应</span>
+      </button>
+
+      <div class="dock-sep"></div>
+
+      <!-- 从相册选择/添加槽位 -->
+      <button class="cmp-btn-tool" id="btn-cmp-add" title="添加更多对比照片 (或直接拖入)">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>添加</span>
+      </button>
+
+      <!-- 退出对比 -->
+      <button class="cmp-btn-close" id="btn-cmp-close" title="退出对比 (Esc)">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        <span>退出</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- 分屏对比舞台容器 -->
+  <div id="compare-split-stage" class="compare-split-stage layout-2-col"></div>
+
+  <!-- 卷帘对比舞台容器 -->
+  <div id="compare-curtain-stage" class="compare-curtain-stage" hidden>
+    <div class="curtain-box" id="curtain-box">
+      <div class="curtain-layer layer-b" id="curtain-layer-b">
+        <img id="curtain-img-b" alt="" draggable="false" />
+        <div class="curtain-badge badge-b" id="curtain-badge-b">照片 B</div>
+      </div>
+      <div class="curtain-layer layer-a" id="curtain-layer-a">
+        <img id="curtain-img-a" alt="" draggable="false" />
+        <div class="curtain-badge badge-a" id="curtain-badge-a">照片 A</div>
+      </div>
+      <!-- 可拖动分割线与手柄 -->
+      <div class="curtain-divider" id="curtain-divider">
+        <div class="curtain-line"></div>
+        <div class="curtain-knob">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+            <path d="M8.5 7l-5 5 5 5V7zm7 0v10l5-5-5-5z"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- A/B 闪烁对比舞台容器 -->
+  <div id="compare-blink-stage" class="compare-blink-stage" hidden>
+    <div class="blink-box" id="blink-box">
+      <img id="blink-img" alt="" draggable="false" />
+      <div class="blink-indicator" id="blink-indicator">
+        <span class="blink-tag blink-a active" id="blink-tag-a">照片 A</span>
+        <span class="blink-tag blink-b" id="blink-tag-b">照片 B</span>
+        <span class="blink-tip">轻按或长按 <kbd>Tab</kbd> / <kbd>Space</kbd> 极速交替</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 对比底部候补胶片条 / 托盘 -->
+  <div id="compare-filmstrip" class="compare-filmstrip"></div>
+</section>
+
 <!-- 悬浮控制坞 (Floating Action Dock) -->
 <div id="actionbar" hidden>
   <div class="dock-inner">
@@ -355,7 +494,7 @@
           <span class="setting-desc">检查获取最新功能与性能优化</span>
         </div>
         <div class="version-action-group">
-          <span class="version-tag" id="app-version">v1.4.0</span>
+          <span class="version-tag" id="app-version">v1.5.0</span>
           <button class="mini-btn" id="btn-check-update">检查新版本</button>
         </div>
       </div>
@@ -446,6 +585,19 @@
         <div class="key-item"><div class="kbd-wrap"><kbd>I</kbd></div><span>显示 / 隐藏 EXIF 面板</span></div>
         <div class="key-item"><div class="kbd-wrap"><kbd>T</kbd></div><span>切换暗色 / 亮色主题</span></div>
         <div class="key-item"><div class="kbd-wrap"><kbd>F5</kbd><kbd>R</kbd></div><span>刷新文件夹内容</span></div>
+      </div>
+
+      <div class="key-col">
+        <div class="key-col-title">细节对比工作台</div>
+        <div class="key-item"><div class="kbd-wrap"><kbd class="kbd-accent">C</kbd></div><span>进入 / 退出细节对比</span></div>
+        <div class="key-item"><div class="kbd-wrap"><kbd>S</kbd></div><span>切换视口同步联动</span></div>
+        <div class="key-item"><div class="kbd-wrap"><kbd>Z</kbd></div><span>全部 100% (1:1) 焦点对齐</span></div>
+        <div class="key-item"><div class="kbd-wrap"><kbd>Tab</kbd></div><span>A/B 闪烁快速交替</span></div>
+        <div class="key-item"><div class="kbd-wrap"><kbd>F</kbd></div><span>收藏 / 取消收藏当前槽位</span></div>
+        <div class="key-item"><div class="kbd-wrap"><kbd>W</kbd></div><span>胜出裁决 (保留胜出者)</span></div>
+        <div class="key-item"><div class="kbd-wrap"><kbd>X</kbd><kbd>Del</kbd></div><span>把当前槽位移出对比</span></div>
+        <div class="key-item"><div class="kbd-wrap"><kbd>1</kbd>–<kbd>6</kbd></div><span>切换激活槽位</span></div>
+        <div class="key-item"><div class="kbd-wrap"><kbd>Esc</kbd></div><span>退出对比返回</span></div>
       </div>
     </div>
 
