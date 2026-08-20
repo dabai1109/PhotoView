@@ -73,7 +73,7 @@ jobs:
         with:
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('PhotoView {0}', github.ref_name) || '' }}
-          releaseBody: 'PhotoView 极致轻量选片工作台 (Tauri 2.0 驱动，安装包仅 2~5MB)'
+          releaseBody: 'PhotoView 极致轻量选片工作台 (Tauri 2.0 驱动，安装包仅 2~10MB)'
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
