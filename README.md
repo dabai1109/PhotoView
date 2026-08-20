@@ -178,7 +178,6 @@ npm run tauri:build
 ```
 PhotoView/
 ├── .github/workflows/       # GitHub Actions CI/CD 自动构建与发布
-├── assets/                  # 静态资源与图标
 ├── src/
 │   └── renderer/            # 前端渲染层 (原生 ESM，零第三方框架)
 │       ├── index.html       # 主页面骨架与弹窗结构
