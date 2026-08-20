@@ -156,7 +156,7 @@ cd PhotoView
 npm install
 
 # 3. 启动开发模式 (热重载)
-npm run tauri:dev
+npm run dev
 
 # 4. 执行完整测试套件 (包含前端回归测试与 Rust 单元测试)
 npm test
@@ -168,7 +168,10 @@ npm run test:js
 npm run test:rust
 
 # 5. 构建生产安装包 (Release)
-npm run tauri:build
+npm run build
+
+# 6. 清理 Rust 编译缓存 (释放磁盘空间)
+npm run clean
 ```
 
 ---
@@ -202,8 +205,9 @@ PhotoView/
 │   │   └── types.rs         # 核心数据结构定义
 │   └── tests/
 │       └── fixtures.rs      # 真实素材端到端集成测试
-├── test/                    # 前端方向计算与状态回归测试
+├── test/                    # 前端方向计算与会话游标回归测试
 ├── test-photos/             # 测试样本素材 (包含竖拍 EXIF、配对文件等)
+├── updater_key(.pub)        # Tauri 自动更新签名密钥 (公钥/私钥)
 └── package.json             # 项目元信息与 npm 脚本
 ```
 
