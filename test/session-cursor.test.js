@@ -108,7 +108,17 @@ function makePv(sessions) {
     getSession: (root) => Promise.resolve({ cursor: sessions[root].cursor }),
     setSession: () => Promise.resolve(true),
     saveFavorites: () => Promise.resolve(0),
-    getFavorites: () => Promise.resolve([]),
+    favoriteFiles: (root, files) =>
+      Promise.resolve(
+        files.map((f) => {
+          const leaf = f.split(/[\\/]/).pop();
+          return { from: f, to: `${root}/收藏/${leaf}` };
+        })
+      ),
+    unfavoriteFiles: (moves) =>
+      Promise.resolve(
+        moves.map((m) => ({ from: m.to, to: m.from }))
+      ),
     preview: () => Promise.resolve({ ok: false }),
     putThumb: () => Promise.resolve(false),
     setNativeTheme: () => Promise.resolve(true),
@@ -151,4 +161,27 @@ test('越界 / 缺失的游标要被夹进合法范围', async () => {
   assert.strictEqual(app.S.cur, 0, '负数 cursor 应夹到 0');
   await app.openFolder('D:/Empty');
   assert.strictEqual(app.S.cur, 0, '空相册的游标必须是 0');
+});
+
+test('收藏操作将文件路径更新至收藏文件夹并支持撤销恢复', async () => {
+  const pv = makePv({ 'D:/Photos': { count: 5, cursor: 0 } });
+  const app = loadApp(pv);
+  await app.openFolder('D:/Photos');
+
+  const g0 = app.S.view[0];
+  const origPath = g0.primary;
+  assert.strictEqual(g0.state, 'none');
+
+  // 执行收藏
+  await app.actFavorite();
+  assert.strictEqual(g0.state, 'fav');
+  assert.strictEqual(g0.primary, 'D:/Photos/收藏/IMG_0.NEF');
+  assert.strictEqual(g0.files[0], 'D:/Photos/收藏/IMG_0.NEF');
+  assert.strictEqual(g0.dir, 'D:/Photos/收藏');
+
+  // 执行撤销
+  await app.actUndo();
+  assert.strictEqual(g0.state, 'none');
+  assert.strictEqual(g0.primary, origPath);
+  assert.strictEqual(g0.files[0], origPath);
 });

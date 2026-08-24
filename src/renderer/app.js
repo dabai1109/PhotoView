@@ -10,7 +10,9 @@ const el = (tag, cls) => {
 /* ============ 状态 ============ */
 const S = {
   root: null,
+  favoritesFolderName: '收藏',
   favoritesFileName: 'favorites.txt',
+  hasLegacyFavList: false,
   all: [],
   view: [],
   cur: 0,
@@ -31,6 +33,106 @@ const S = {
     prevMode: 'grid',
   },
 };
+
+const normSlash = (p) => String(p == null ? '' : p).replace(/\\/g, '/');
+const rootNorm = () => normSlash(S.root).replace(/\/$/, '');
+
+/** 绝对路径 -> 相对相册根目录的路径；不在相册里就返回 null */
+function relToRoot(abs) {
+  const r = rootNorm();
+  if (!r) return null;
+  const p = normSlash(abs);
+  return p.toLowerCase().startsWith(r.toLowerCase() + '/') ? p.slice(r.length + 1) : null;
+}
+const absFromRoot = (rel) => `${rootNorm()}/${rel}`;
+
+/**
+ * 文件被搬走之后，把 g 里记的路径全部换成新的。
+ *
+ * 收藏 = 真的搬文件，所以 files / primary / dir / name / base / id 全都得跟着改：
+ * 漏掉任何一个，后面的缩略图、大图、删除都会照着一个已经不存在的路径去打。
+ * 撞名时后端会改名（a.jpg -> a (1).jpg），所以主名也不能想当然。
+ */
+function applyGroupMove(g, movedList) {
+  if (!g || !Array.isArray(movedList)) return;
+  const moveMap = new Map();
+  for (const m of movedList) {
+    if (m && m.from && m.to) {
+      moveMap.set(m.from, m.to);
+    }
+  }
+  if (!moveMap.size) return;
+
+  // 缩略图 / 大图缓存都是按路径存的，搬完不把它们挪过去，
+  // 每按一次 F 都要重新解一遍 RAW —— 网格里会明显闪一下占位图
+  for (const [from, to] of moveMap) {
+    if (from === to) continue;
+    if (urlCache.has(from)) {
+      urlCache.set(to, urlCache.get(from));
+      urlCache.delete(from);
+    }
+    if (fullCache.has(from)) {
+      fullCache.set(to, fullCache.get(from));
+      fullCache.delete(from);
+    }
+  }
+
+  g.files = g.files.map((f) => moveMap.get(f) || f);
+  if (moveMap.has(g.primary)) g.primary = moveMap.get(g.primary);
+  if (!g.primary) return;
+
+  const lastSlash = Math.max(g.primary.lastIndexOf('/'), g.primary.lastIndexOf('\\'));
+  if (lastSlash >= 0) {
+    g.dir = g.primary.slice(0, lastSlash);
+    g.name = g.primary.slice(lastSlash + 1);
+  }
+  const dot = g.name.lastIndexOf('.');
+  g.base = dot > 0 ? g.name.slice(0, dot) : g.name;
+  if (S.root) g.id = relToRoot(g.primary) || g.name;
+}
+
+/** 这个文件是不是躺在相册的收藏文件夹里 */
+function isInFavFolder(file) {
+  const rel = relToRoot(file);
+  if (!rel) return false;
+  return rel.toLowerCase().startsWith(`${(S.favoritesFolderName || '收藏').toLowerCase()}/`);
+}
+
+/**
+ * 取消收藏 / 撤销要把文件送回哪儿。
+ *
+ * 收藏时记下的 `_origFiles` 是唯一可靠的答案（跨会话由 session 的 favOrigins 补回来）。
+ * 实在没有 —— 比如照片是用户自己拖进收藏夹的 —— 只能退回相册根目录：
+ * 后端撞名时会自动改名不覆盖，所以这个退路顶多是放错地方，不会毁数据。
+ *
+ * 还没进过收藏夹的（比如 1.5.0 的 favorites.txt 里记着、人还在原处的老收藏）
+ * 返回 from == to，后端原地放过 —— 取消收藏只该摘掉星星，不该把人家照片搬到根目录去。
+ */
+function restoreTargetsFor(g) {
+  const orig = g._origFiles;
+  const hasOrigins = orig && orig.length === g.files.length;
+  return g.files.map((f, i) => {
+    if (!isInFavFolder(f)) return { from: f, to: f };
+    if (hasOrigins) return { from: orig[i], to: f };
+    return { from: `${rootNorm()}/${f.split(/[\\/]/).pop()}`, to: f };
+  });
+}
+
+/** 从 session 里把「这张照片原来在哪」读回来，重开相册后取消收藏才不会乱放 */
+function hydrateFavOrigins(groups, origins) {
+  if (!origins || typeof origins !== 'object') return;
+  const idx = new Map(Object.entries(origins).map(([k, v]) => [String(k).toLowerCase(), v]));
+  for (const g of groups) {
+    if (g.state !== 'fav') continue;
+    const orig = g.files.map((f) => {
+      const rel = relToRoot(f);
+      const o = rel ? idx.get(rel.toLowerCase()) : null;
+      return o ? absFromRoot(o) : null;
+    });
+    // 只认整组齐全的：缺一个就说不清配对该去哪，宁可退回根目录那条退路
+    if (orig.every(Boolean)) g._origFiles = orig;
+  }
+}
 
 const swapped = (o) => o >= 5 && o <= 8;
 const mirrored = (o) => o === 2 || o === 4 || o === 5 || o === 7;
@@ -238,15 +340,18 @@ async function openFolder(root) {
   $('#folder-name').innerHTML = '正在扫描…';
 
   const [res, session] = await Promise.all([window.pv.scanFolder(root), window.pv.getSession(root)]);
+  S.favoritesFolderName = res.favoritesFolderName || S.settings.favoritesFolderName || '收藏';
   S.favoritesFileName = res.favoritesFileName || S.settings.favoritesFileName || 'favorites.txt';
+  S.hasLegacyFavList = !!res.hasLegacyFavorites;
   S.session = { cursor: 0, ...session };
 
-  // 收藏状态直接由相册根目录的 favorites.txt (及全局 session) 决定
+  // 收藏状态由物理收藏文件夹（及遗留 favorites.txt / session）决定
   S.all = res.groups.map((g) => ({
     ...g,
     state: g.favored ? 'fav' : 'none',
     meta: null,
   }));
+  hydrateFavOrigins(S.all, S.session.favOrigins);
   S.undo = [];
   S.filter = 'all';
   // 上一个相册的 view 必须先清掉：applyFilter 靠 S.view[S.cur] 做「保持当前选中」，
@@ -280,7 +385,9 @@ async function refreshFolder() {
 
   try {
     const [res, session] = await Promise.all([window.pv.scanFolder(S.root), window.pv.getSession(S.root)]);
+    S.favoritesFolderName = res.favoritesFolderName || S.settings.favoritesFolderName || '收藏';
     S.favoritesFileName = res.favoritesFileName || S.settings.favoritesFileName || 'favorites.txt';
+    S.hasLegacyFavList = !!res.hasLegacyFavorites;
     S.session = { cursor: 0, ...session };
 
     S.all = res.groups.map((g) => ({
@@ -288,6 +395,10 @@ async function refreshFolder() {
       state: g.favored ? 'fav' : 'none',
       meta: null,
     }));
+    hydrateFavOrigins(S.all, S.session.favOrigins);
+    // 重新扫出来的是一批新对象，撤销栈里攒的那些 g 已经不在 S.all 里了：
+    // 留着它们撤销只会去改一个没人显示的孤儿对象，界面纹丝不动
+    S.undo = [];
 
     applyFilter(prevFilter);
 
@@ -1577,14 +1688,25 @@ function syncCompareFilmstrip() {
 }
 
 /* ---------- 槽位操作 ---------- */
-function toggleSlotFav(idx) {
+const toggleSlotFav = (idx) => withMoveLock(() => doToggleSlotFav(idx));
+
+/** 槽位里的照片被搬走之后，把槽位自己记的那份路径也换掉 */
+function syncSlotToGroup(item, g) {
+  item.primary = g.primary;
+  item.name = g.name;
+  item.id = g.id;
+  item.files = [...g.files];
+  item.state = g.state;
+}
+
+async function doToggleSlotFav(idx) {
   const item = S.compare.items[idx];
   if (!item) return;
-  // 外部拖进来的照片不属于当前相册，saveSession 靠 S.root + S.all 落盘，收藏无处可写 ——
+  // 外部拖进来的照片不属于当前相册，收藏是往相册根目录的收藏夹里搬 ——
   // 与其弹一句骗人的「已收藏」，不如直说
   const g = S.all.find((x) => x.primary === item.primary || x.id === item.id);
   if (!g) {
-    toast(`「${item.name}」不在当前相册中，收藏无法保存`, { err: true });
+    toast(`「${item.name}」不在当前相册中，收藏无法移动`, { err: true });
     return;
   }
   if (g.state === 'del') {
@@ -1593,29 +1715,47 @@ function toggleSlotFav(idx) {
   }
 
   if (g.state === 'fav') {
+    let moved;
+    try {
+      moved = await window.pv.unfavoriteFiles(restoreTargetsFor(g));
+    } catch (err) {
+      return toast(`移出收藏文件夹失败：${err}`, { err: true });
+    }
+    applyGroupMove(g, moved);
     g.state = 'none';
-    S.undo.push({ kind: 'unfav', g });
-    toast(`已取消收藏 · ${item.name}`);
+    delete g._origFiles;
+    S.undo.push({ kind: 'unfav', g, moved });
+    syncSlotToGroup(item, g);
+    toast(`已移出收藏文件夹 · ${item.name}`);
   } else {
+    const origFiles = [...g.files];
+    let moved;
+    try {
+      moved = await window.pv.favoriteFiles(S.root, g.files);
+    } catch (err) {
+      return toast(`移入收藏文件夹失败：${err}`, { err: true });
+    }
+    g._origFiles = origFiles;
+    applyGroupMove(g, moved);
     g.state = 'fav';
-    S.undo.push({ kind: 'fav', g });
-    toast(`★ 已收藏 · ${item.name}`);
+    S.undo.push({ kind: 'fav', g, moved });
+    syncSlotToGroup(item, g);
+    toast(`★ 已移入收藏 · ${item.name}`);
   }
-  item.state = g.state;
 
   saveSession();
   syncSlotChrome();
   updateCounts();
 }
 
-function pickCompareWinner(idx) {
+async function pickCompareWinner(idx) {
   const item = S.compare.items[idx];
   if (!item) return;
   // 必须先把 curSlot 指到胜出者：closeCompare 是按 curSlot 回定位 S.cur 的，
   // 不然在槽位 0 激活时点槽位 2 的奖杯，最后打开的会是槽位 0 那张
   S.compare.curSlot = idx;
   toast(`👑 胜出裁决：已选择「${item.name}」`);
-  if (item.state !== 'fav') toggleSlotFav(idx);
+  if (item.state !== 'fav') await toggleSlotFav(idx);
   // 胜出者在相册里就直接进大图细看，否则按原来的视图退
   if (S.view.some((g) => g.primary === item.primary || g.id === item.id)) S.compare.prevMode = 'loupe';
   closeCompare(); // 内部已经会回 loupe / grid，外面不要再调一次
@@ -2021,14 +2161,42 @@ function saveSession() {
   saveTimer = setTimeout(async () => {
     if (!S.root) return;
     const favList = [];
+    // 收藏夹里的照片原来在哪：全用相对路径存，相册整个搬盘也还认得
+    const favOrigins = {};
     for (const g of S.all) {
-      if (g.state === 'fav') favList.push(g.id);
+      if (g.state !== 'fav') continue;
+      favList.push(g.id);
+      const orig = g._origFiles;
+      if (!orig || orig.length !== g.files.length) continue;
+      g.files.forEach((f, i) => {
+        const cur = relToRoot(f);
+        const src = relToRoot(orig[i]);
+        if (cur && src && cur !== src) favOrigins[cur] = src;
+      });
     }
-    // 写入相册根目录的 favorites.txt
-    window.pv.saveFavorites(S.root, favList);
     // 记录全局 session
-    window.pv.setSession(S.root, { favorites: favList, cursor: S.cur });
+    window.pv.setSession(S.root, { favorites: favList, cursor: S.cur, favOrigins });
+
+    // 相册里还留着 1.5.0 那份 favorites.txt 时，得跟着更新。
+    // 扫描仍然把它当收藏来源读，只读不写的话用户刚取消掉的收藏下次刷新又冒出来了。
+    // 没有这个文件的新相册不碰 —— 收藏文件夹才是现在的记录方式，别乱撒文件。
+    if (S.hasLegacyFavList) window.pv.saveFavorites(S.root, favList);
   }, 200);
+}
+
+/* 收藏 / 取消收藏 / 撤销现在都会真的搬文件，而搬文件是异步的。搬到一半再进来一次
+   （长按 F 连发、连点按钮、快捷键和鼠标撞车）就会拿着旧路径去动已经不在原处的文件：
+   轻则弹一句莫名的失败提示，重则往撤销栈里堆两条重复记录，Ctrl+Z 得按两下才回来。
+   这几个动作共用一把锁，老老实实串行。 */
+let moveBusy = false;
+async function withMoveLock(fn) {
+  if (moveBusy) return;
+  moveBusy = true;
+  try {
+    return await fn();
+  } finally {
+    moveBusy = false;
+  }
 }
 
 function afterAction(g, advance) {
@@ -2053,21 +2221,42 @@ function afterAction(g, advance) {
   saveSession();
 }
 
-async function actFavorite() {
+const actFavorite = () => withMoveLock(doFavoriteToggle);
+
+async function doFavoriteToggle() {
   const g = S.view[S.cur];
   if (!g || g.state === 'del') return;
 
+  // try 只包住真正会失败的那一步 IPC：把后面的渲染也包进来，
+  // 一个 DOM 报错就会被说成「移动失败」，人照着提示去查磁盘只会更糊涂
   if (g.state === 'fav') {
+    let moved;
+    try {
+      moved = await window.pv.unfavoriteFiles(restoreTargetsFor(g));
+    } catch (err) {
+      return toast(`移出收藏文件夹失败：${err}`, { err: true });
+    }
+    applyGroupMove(g, moved);
     g.state = 'none';
-    S.undo.push({ kind: 'unfav', g });
-    toast(`已取消收藏 · ${g.name}`);
+    delete g._origFiles;
+    S.undo.push({ kind: 'unfav', g, moved });
+    toast(`已移出收藏文件夹 · ${g.name}`);
     afterAction(g, false);
     return;
   }
 
+  const origFiles = [...g.files];
+  let moved;
+  try {
+    moved = await window.pv.favoriteFiles(S.root, g.files);
+  } catch (err) {
+    return toast(`移入收藏文件夹失败：${err}`, { err: true });
+  }
+  g._origFiles = origFiles;
+  applyGroupMove(g, moved);
   g.state = 'fav';
-  S.undo.push({ kind: 'fav', g });
-  toast(`★ 已收藏 · ${g.name}`);
+  S.undo.push({ kind: 'fav', g, moved });
+  toast(`★ 已移入收藏 · ${g.name}`);
   afterAction(g, S.settings.autoAdvanceOnFavorite);
 }
 
@@ -2087,7 +2276,9 @@ async function actDelete() {
   afterAction(g, S.settings.autoAdvanceOnDelete);
 }
 
-async function actUndo() {
+const actUndo = () => withMoveLock(doUndo);
+
+async function doUndo() {
   const a = S.undo.pop();
   if (!a) return toast('没有可以撤销的操作');
   const g = a.g;
@@ -2103,9 +2294,34 @@ async function actUndo() {
     g.state = a.wasFav ? 'fav' : 'none';
     toast(`已还原 ${g.name}`);
   } else if (a.kind === 'fav') {
+    if (a.moved && a.moved.length) {
+      try {
+        const movedBack = await window.pv.unfavoriteFiles(a.moved);
+        applyGroupMove(g, movedBack);
+        delete g._origFiles;
+      } catch (err) {
+        S.undo.push(a);
+        return toast(`撤销移动失败：${err}`, { err: true });
+      }
+    }
     g.state = 'none';
     toast(`已取消收藏 ${g.name}`);
   } else if (a.kind === 'unfav') {
+    // 撤销「取消收藏」= 再搬回收藏夹，所以走 favoriteFiles。
+    // 不能把 a.moved 对调塞回 unfavoriteFiles：后端看到「文件已经在原位」
+    // 会当作还原完成、一个字节都不动，界面这边却已经标成收藏 —— 路径和磁盘就此错开。
+    const movedAnything = (a.moved || []).some((m) => m.from !== m.to);
+    if (movedAnything) {
+      const before = [...g.files];
+      try {
+        const movedRedo = await window.pv.favoriteFiles(S.root, g.files);
+        applyGroupMove(g, movedRedo);
+        g._origFiles = before;
+      } catch (err) {
+        S.undo.push(a);
+        return toast(`恢复收藏移动失败：${err}`, { err: true });
+      }
+    }
     g.state = 'fav';
     toast(`已恢复收藏 ${g.name}`);
   }
@@ -2500,7 +2716,7 @@ $('#zoom-grid').onchange = () => window.pv.setSettings({ thumbSize: S.settings.t
 
 $('#btn-settings').onclick = () => {
   $('#set-theme').value = S.settings.theme || 'dark';
-  $('#set-favname').value = S.settings.favoritesFileName || 'favorites.txt';
+  $('#set-favname').value = S.settings.favoritesFolderName || '收藏';
   $('#set-group').checked = S.settings.groupRawJpeg;
   $('#set-recursive').checked = S.settings.recursive;
   $('#set-adv-fav').checked = S.settings.autoAdvanceOnFavorite;
@@ -2511,9 +2727,12 @@ $('#btn-settings').onclick = () => {
 $('#btn-close-settings').onclick = async () => {
   const newTheme = $('#set-theme').value;
   const themeChanged = S.settings.theme !== newTheme;
+  const favFolderVal = $('#set-favname').value.trim() || '收藏';
   const patch = {
     theme: newTheme,
-    favoritesFileName: $('#set-favname').value.trim() || 'favorites.txt',
+    // 这里只改收藏文件夹名。favoritesFileName 是遗留清单文件（favorites.txt）的名字，
+    // 两码事 —— 一起写进去的话，读遗留清单会去找一个叫「收藏」的文件
+    favoritesFolderName: favFolderVal,
     groupRawJpeg: $('#set-group').checked,
     recursive: $('#set-recursive').checked,
     autoAdvanceOnFavorite: $('#set-adv-fav').checked,
@@ -2521,6 +2740,7 @@ $('#btn-close-settings').onclick = async () => {
     confirmDelete: $('#set-confirm').checked,
   };
   S.settings = await window.pv.setSettings(patch);
+  S.favoritesFolderName = S.settings.favoritesFolderName || '收藏';
   if (themeChanged) applyTheme(S.settings.theme);
   $('#settings-modal').hidden = true;
 };
@@ -2559,6 +2779,7 @@ window.__pv = {
   syncTargets,
   canonicalLayout,
   pickCompareWinner,
+  toggleSlotFav,
   removeFromCompare,
   applyFilter,
   actFavorite,

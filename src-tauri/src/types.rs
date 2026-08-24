@@ -19,6 +19,12 @@ pub struct PhotoGroup {
     pub favored: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct MoveItem {
+    pub from: String,
+    pub to: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ScanResult {
     pub ok: bool,
@@ -26,6 +32,12 @@ pub struct ScanResult {
     pub groups: Vec<PhotoGroup>,
     #[serde(rename = "favoritesFileName")]
     pub favorites_file_name: String,
+    #[serde(rename = "favoritesFolderName", default)]
+    pub favorites_folder_name: String,
+    /// 相册根目录里还留着 1.5.0 那份纯文本清单，且里面确实有内容。
+    /// 前端据此决定要不要跟着更新那个文件 —— 不然用户取消掉的收藏下次扫描又冒出来
+    #[serde(rename = "hasLegacyFavorites", default)]
+    pub has_legacy_favorites: bool,
 }
 
 /// 字段名必须与 app.js 的读取方式一致：ex.aperture / ex.shutter / ex.iso / ex.focal …

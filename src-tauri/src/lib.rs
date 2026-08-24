@@ -49,15 +49,18 @@ async fn scan_folder(root: String) -> ScanResult {
         root: root.clone(),
         groups: Vec::new(),
         favorites_file_name: "favorites.txt".to_string(),
+        favorites_folder_name: "收藏".to_string(),
+        has_legacy_favorites: false,
     };
     blocking(move || {
         let s = settings::read_settings();
         let recursive = s.get("recursive").and_then(|v| v.as_bool()).unwrap_or(true);
         let group = s.get("groupRawJpeg").and_then(|v| v.as_bool()).unwrap_or(true);
-        let fav_name = settings::favorites_file_name();
+        let fav_folder = settings::favorites_folder_name();
+        let legacy_list = settings::favorites_file_name();
 
         let _ = settings::add_recent(&root);
-        scan::scan_folder(&root, recursive, group, &fav_name)
+        scan::scan_folder(&root, recursive, group, &fav_folder, &legacy_list)
     })
     .await
     .unwrap_or(fallback)
@@ -98,6 +101,26 @@ async fn clear_cache() -> bool {
 }
 
 #[tauri::command]
+async fn favorite_files(root: String, files: Vec<String>) -> Result<Vec<types::MoveItem>, String> {
+    blocking(move || {
+        let folder_name = settings::favorites_folder_name();
+        fav::favorite_files(&root, &folder_name, &files)
+    })
+    .await
+    .unwrap_or_else(|| Err("收藏移动任务被中断".to_string()))
+}
+
+#[tauri::command]
+async fn unfavorite_files(moves: Vec<types::MoveItem>) -> Result<Vec<types::MoveItem>, String> {
+    blocking(move || fav::unfavorite_files(&moves))
+        .await
+        .unwrap_or_else(|| Err("还原移动任务被中断".to_string()))
+}
+
+/// 回写遗留清单（1.5.0 及以前的 favorites.txt / .json）。
+/// 收藏本身已经是「照片搬进收藏文件夹」，这里只为老相册保持那份清单不过期 ——
+/// 扫描仍会读它来保住已有星标，不同步的话用户摘掉的星星下次扫描又长回来。
+#[tauri::command]
 async fn save_favorites(root: String, fav_list: Vec<String>) -> Result<usize, String> {
     blocking(move || {
         let fav_name = settings::favorites_file_name();
@@ -105,16 +128,6 @@ async fn save_favorites(root: String, fav_list: Vec<String>) -> Result<usize, St
     })
     .await
     .unwrap_or_else(|| Err("保存任务被中断".to_string()))
-}
-
-#[tauri::command]
-async fn get_favorites(root: String) -> Vec<String> {
-    blocking(move || {
-        let fav_name = settings::favorites_file_name();
-        fav::read_favorites(&root, &fav_name)
-    })
-    .await
-    .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -433,8 +446,9 @@ pub fn run() {
             take_preview_bytes,
             put_thumb,
             clear_cache,
+            favorite_files,
+            unfavorite_files,
             save_favorites,
-            get_favorites,
             trash_files,
             restore_files,
             reveal_in_explorer,

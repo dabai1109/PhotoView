@@ -96,6 +96,12 @@ const makeMockPv = (root, scanResult) => ({
   getSession: async () => ({ cursor: 0, favorites: [] }),
   setSession: async () => true,
   saveFavorites: async () => true,
+  favoriteFiles: async (root, files) =>
+    files.map((f) => {
+      const leaf = f.split(/[\\/]/).pop();
+      return { from: f, to: `${root}/收藏/${leaf}` };
+    }),
+  unfavoriteFiles: async (moves) => moves.map((m) => ({ from: m.to, to: m.from })),
   scanFolder: async () => scanResult || fakeScan(5, root),
   preview: async () => ({ ok: true, data: new Uint8Array(10), orientation: 1, width: 4000, height: 3000, exif: {} }),
 });
@@ -205,7 +211,7 @@ test('pickCompareWinner 定位到胜出的那张，而不是当前激活槽位�
   assert.strictEqual(app.S.compare.curSlot, 0); // 激活的是槽位 0
 
   // 在槽位 0 激活的状态下裁决槽位 1 胜出
-  app.pickCompareWinner(1);
+  await app.pickCompareWinner(1);
 
   assert.strictEqual(app.S.view[app.S.cur].name, 'IMG_1.NEF', '应该落在胜出者身上');
   assert.strictEqual(app.S.all[1].state, 'fav', '胜出者要被自动收藏');

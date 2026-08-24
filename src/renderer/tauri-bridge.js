@@ -97,8 +97,11 @@
       if (r.token !== null && r.token !== undefined) await takeBytes(r.token); // 别把字节挂在 Rust 侧不放
       return r.exif || null;
     },
+    // 收藏 = 把整组文件搬进相册根目录的收藏文件夹；unfavoriteFiles 是把这一步倒回去
+    favoriteFiles: (root, files) => invoke('favorite_files', { root, files }),
+    unfavoriteFiles: (moves) => invoke('unfavorite_files', { moves }),
+    // 只在还留着 1.5.0 那份清单的老相册里回写，保持星标不过期
     saveFavorites: (root, favList) => invoke('save_favorites', { root, favList }),
-    getFavorites: (root) => invoke('get_favorites', { root }),
     trash: (files) => invoke('trash_files', { files }),
     restore: (files) => invoke('restore_files', { files }),
     reveal: (p) => invoke('reveal_in_explorer', { path: p }),

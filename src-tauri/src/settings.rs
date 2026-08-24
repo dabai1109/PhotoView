@@ -55,6 +55,7 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
 
 pub fn defaults() -> Value {
     json!({
+        "favoritesFolderName": "收藏",
         "favoritesFileName": "favorites.txt",
         "groupRawJpeg": true,
         "recursive": true,
@@ -98,7 +99,7 @@ pub fn write_settings(patch: Value) -> Value {
     current
 }
 
-/// 收藏清单的文件名。必须是纯文件名 —— 否则 `root.join(name)` 会被绝对路径
+/// 收藏清单的文件名或目录名。必须是纯名字 —— 否则 `root.join(name)` 会被绝对路径
 /// 或 `..` 带出相册目录，等于给前端开了任意文件写入。
 pub fn sanitize_file_name(name: &str, fallback: &str) -> String {
     let n = name.trim();
@@ -124,6 +125,16 @@ pub fn favorites_file_name() -> String {
         .and_then(|v| v.as_str())
         .unwrap_or("favorites.txt");
     sanitize_file_name(raw, "favorites.txt")
+}
+
+/// 从配置里读出（已消毒的）收藏文件夹名
+pub fn favorites_folder_name() -> String {
+    let s = read_settings();
+    let raw = s
+        .get("favoritesFolderName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("收藏");
+    sanitize_file_name(raw, "收藏")
 }
 
 pub fn read_recent() -> Vec<String> {
@@ -175,6 +186,7 @@ mod tests {
     #[test]
     fn defaults_are_complete() {
         let d = defaults();
+        assert_eq!(d["favoritesFolderName"], "收藏");
         assert_eq!(d["favoritesFileName"], "favorites.txt");
         assert_eq!(d["thumbSize"], 220);
         assert_eq!(d["theme"], "dark");
