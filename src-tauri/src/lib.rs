@@ -426,6 +426,11 @@ fn window_close(window: tauri::Window) {
     let _ = window.close();
 }
 
+#[tauri::command]
+fn get_app_version(app: tauri::AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -461,6 +466,7 @@ pub fn run() {
             window_minimize,
             window_toggle_maximize,
             window_close,
+            get_app_version,
             update::check_for_updates,
             update::download_and_install_update,
             update::restart_app

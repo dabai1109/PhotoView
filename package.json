@@ -1,6 +1,6 @@
 {
   "name": "photoview",
-  "version": "1.6.0",
+  "version": "1.6.2",
   "productName": "PhotoView",
   "description": "摄影师选片工具 — 极致轻量、超高速 RAW/JPEG 选片工作台",
   "author": "PhotoView",
@@ -32,7 +32,12 @@
     "test:js": "node --test test/orientation.test.js test/session-cursor.test.js test/compare-studio.test.js test/favorites-move.test.js",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:fixtures": "node test/make-fixtures.js",
-    "clean": "cargo clean --manifest-path src-tauri/Cargo.toml"
+    "clean": "cargo clean --manifest-path src-tauri/Cargo.toml",
+    "sync-version": "node scripts/sync-version.js",
+    "version": "node scripts/sync-version.js",
+    "bump:patch": "npm version patch --no-git-tag-version",
+    "bump:minor": "npm version minor --no-git-tag-version",
+    "bump:major": "npm version major --no-git-tag-version"
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.11.1",

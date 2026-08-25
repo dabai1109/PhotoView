@@ -112,8 +112,8 @@
     setSession: (root, data) => invoke('set_session', { root, data }),
     recent: () => invoke('get_recent'),
     clearCache: () => invoke('clear_cache'),
-    // 标题栏跟随主题需要原生窗口 API，暂不接；配色本身由 CSS 的 data-theme 负责
-    setNativeTheme: () => Promise.resolve(true),
+    // 软件版本
+    getVersion: () => invoke('get_app_version'),
     // 自动更新
     checkForUpdates: () => invoke('check_for_updates'),
     downloadAndInstallUpdate: () => invoke('download_and_install_update'),
@@ -322,9 +322,25 @@
     }, 3000);
   };
 
+  /* ---------- 软件版本自动填充 ---------- */
+
+  const initAppVersion = async () => {
+    const el = document.getElementById('app-version');
+    if (!el) return;
+    try {
+      const ver = await invoke('get_app_version');
+      if (ver) {
+        el.textContent = ver.startsWith('v') ? ver : `v${ver}`;
+      }
+    } catch (e) {
+      console.warn('[Tauri Bridge] 获取应用版本失败:', e);
+    }
+  };
+
   const init = () => {
     listenDragDrop();
     initWindowControls();
+    initAppVersion();
     initAutoUpdater();
   };
 

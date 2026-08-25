@@ -1,625 +1,781 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
-<meta charset="utf-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; child-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost; font-src 'self';" />
-<title>PhotoView · 摄影师高速选片</title>
-<link rel="icon" type="image/png" href="icon.png" />
-<link rel="stylesheet" href="styles.css" />
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'none'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; child-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost; font-src 'self';" />
+  <title>PhotoView · 摄影师高速选片</title>
+  <link rel="icon" type="image/png" href="icon.png" />
+  <link rel="stylesheet" href="styles.css" />
 </head>
+
 <body>
 
-<!-- 顶栏 / 导航 -->
-<header id="topbar" data-tauri-drag-region>
-  <div class="drag-zone" data-tauri-drag-region>
-    <div class="brand">
-      <img src="icon.png" width="20" height="20" class="brand-logo" alt="PhotoView Logo" />
-      <span class="brand-text">PhotoView</span>
-      <span class="brand-pro">PRO</span>
-    </div>
-    <div id="folder-name" class="folder-name">
-      <svg class="folder-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
-        <path d="M19.5 21a3 3 0 0 0 3-3v-4.5a3 3 0 0 0-3-3h-1.5V9a3 3 0 0 0-3-3h-4.636a2.25 2.25 0 0 1-1.591-.659l-.879-.879A3 3 0 0 0 5.636 3.75H4.5A3 3 0 0 0 1.5 6.75v11.25a3 3 0 0 0 3 3h15Z" />
-      </svg>
-      <span class="folder-text"></span>
-    </div>
-    <div class="drag-spacer" data-tauri-drag-region></div>
-    <div class="win-controls">
-      <button class="win-btn" id="win-min" title="最小化" tabindex="-1">
-        <svg viewBox="0 0 10 10" width="10" height="10"><path d="M0,5 L10,5" stroke="currentColor" stroke-width="1.1"/></svg>
-      </button>
-      <button class="win-btn" id="win-max" title="最大化/还原" tabindex="-1">
-        <svg viewBox="0 0 10 10" width="10" height="10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.1" rx="1"/></svg>
-      </button>
-      <button class="win-btn win-btn-close" id="win-close" title="关闭" tabindex="-1">
-        <svg viewBox="0 0 10 10" width="10" height="10"><path d="M1.5,1.5 L8.5,8.5 M8.5,1.5 L1.5,8.5" stroke="currentColor" stroke-width="1.2"/></svg>
-      </button>
-    </div>
-  </div>
-
-  <div id="topbar-tools" class="tools" hidden>
-    <!-- 分段筛选器 -->
-    <div class="filters" id="filters">
-      <button class="chip active" data-filter="all">
-        <span>全部</span>
-        <b>0</b>
-      </button>
-      <button class="chip" data-filter="todo">
-        <span>待选</span>
-        <b>0</b>
-      </button>
-      <button class="chip chip-fav" data-filter="fav">
-        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-        <span>收藏</span>
-        <b>0</b>
-      </button>
-      <button class="chip chip-del" data-filter="del">
-        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-        <span>已删</span>
-        <b>0</b>
-      </button>
-    </div>
-
-    <div class="spacer"></div>
-
-    <!-- 专业工具按钮组 -->
-    <div class="tool-group">
-      <button class="icon-btn" id="btn-grid" title="网格视图 (G)">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-          <rect x="3" y="3" width="7.5" height="7.5" rx="2"/>
-          <rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/>
-          <rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/>
-          <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/>
-        </svg>
-      </button>
-
-      <button class="icon-btn" id="btn-compare" title="细节对比工作台 (C)">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="8" height="18" rx="2"/>
-          <rect x="13" y="3" width="8" height="18" rx="2"/>
-          <circle cx="7" cy="8" r="1.2" fill="currentColor"/>
-          <circle cx="17" cy="8" r="1.2" fill="currentColor"/>
-        </svg>
-      </button>
-
-      <div class="slider-wrap" title="缩略图大小">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-        <input type="range" id="zoom-grid" min="120" max="420" step="10" />
+  <!-- 顶栏 / 导航 -->
+  <header id="topbar" data-tauri-drag-region>
+    <div class="drag-zone" data-tauri-drag-region>
+      <div class="brand">
+        <img src="icon.png" width="20" height="20" class="brand-logo" alt="PhotoView Logo" />
+        <span class="brand-text">PhotoView</span>
+        <span class="brand-pro">PRO</span>
       </div>
-
-      <div class="divider"></div>
-
-      <button class="icon-btn" id="btn-refresh" title="刷新文件夹 (F5 / R)">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/>
+      <div id="folder-name" class="folder-name">
+        <svg class="folder-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+          <path
+            d="M19.5 21a3 3 0 0 0 3-3v-4.5a3 3 0 0 0-3-3h-1.5V9a3 3 0 0 0-3-3h-4.636a2.25 2.25 0 0 1-1.591-.659l-.879-.879A3 3 0 0 0 5.636 3.75H4.5A3 3 0 0 0 1.5 6.75v11.25a3 3 0 0 0 3 3h15Z" />
         </svg>
-      </button>
-
-      <button class="icon-btn" id="btn-open" title="打开其它文件夹">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-          <line x1="12" y1="11" x2="12" y2="17"/>
-          <line x1="9" y1="14" x2="15" y2="14"/>
-        </svg>
-      </button>
-
-      <button class="icon-btn" id="btn-theme" title="切换主题 (T)">
-        <svg class="icon-moon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-        </svg>
-        <svg class="icon-sun" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="4"/>
-          <line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/>
-          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-          <line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/>
-          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-        </svg>
-      </button>
-
-      <button class="icon-btn" id="btn-settings" title="偏好设置">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
-      </button>
-
-      <button class="icon-btn icon-btn-help" id="btn-help" title="快捷键 (?)">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"/>
-          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-          <line x1="12" y1="17" x2="12.01" y2="17"/>
-        </svg>
-      </button>
-    </div>
-  </div>
-</header>
-
-<!-- 空状态 / 拖入引导区 -->
-<section id="empty">
-  <div class="empty-glow"></div>
-  <div class="empty-card">
-    <div class="empty-icon-wrap">
-      <div class="empty-icon-ring"></div>
-      <div class="empty-icon">
-        <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-          <circle cx="12" cy="13" r="4"/>
-          <path d="M12 11.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z" fill="currentColor"/>
-        </svg>
+        <span class="folder-text"></span>
       </div>
-    </div>
-    
-    <h1 class="empty-title">开启专业选片工作流</h1>
-    <p class="empty-desc">将相机存储卡或照片文件夹拖拽至此 · 支持 RAW 秒级内嵌高清预览提取</p>
-    
-    <div class="format-badges">
-      <span class="badge-raw">NEF</span>
-      <span class="badge-raw">NRW</span>
-      <span class="badge-raw">CR2 / CR3</span>
-      <span class="badge-raw">ARW</span>
-      <span class="badge-raw">DNG</span>
-      <span class="badge-raw">RAF</span>
-      <span class="badge-jpg">JPG / JPEG</span>
-    </div>
-
-    <button class="btn-primary" id="btn-choose">
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-        <line x1="12" y1="11" x2="12" y2="17"/>
-        <line x1="9" y1="14" x2="15" y2="14"/>
-      </svg>
-      <span>选择照片文件夹</span>
-    </button>
-
-    <div id="recent" class="recent"></div>
-  </div>
-</section>
-
-<!-- 网格选片视图 -->
-<main id="grid-view" hidden>
-  <div id="grid-scroll">
-    <div id="grid-canvas"></div>
-  </div>
-  <div id="grid-empty" class="view-empty" hidden>
-    <div class="empty-state-icon">
-      <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="10"/><path d="M16 16s-1.5-2-4-2-4 2-4 2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
-    </div>
-    <span>当前筛选条件下没有照片</span>
-  </div>
-</main>
-
-<!-- 大图看片视图 -->
-<section id="loupe" hidden>
-  <div id="stage">
-    <img id="loupe-img" alt="" draggable="false" />
-    <div id="loupe-loading" class="loupe-loading">
-      <div class="spinner-ring"></div>
-      <span class="spinner-text">加载高清原图…</span>
-    </div>
-    <div id="loupe-error" class="loupe-error" hidden></div>
-    <div id="stage-badges" class="stage-badges"></div>
-    <div id="zoom-hint" class="zoom-hint" hidden>100%</div>
-    
-    <button class="nav-arrow left" id="nav-prev" title="上一张 (←)">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-    </button>
-    <button class="nav-arrow right" id="nav-next" title="下一张 (→)">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-    </button>
-  </div>
-
-  <!-- EXIF / HUD 参数侧边栏 -->
-  <aside id="info-panel">
-    <div class="info-head">
-      <div class="info-tag-row">
-        <span class="info-badge">EXIF 摄影数据</span>
-      </div>
-      <div id="info-name" class="info-name"></div>
-      <div id="info-sub" class="info-sub"></div>
-    </div>
-    
-    <div class="hist-card">
-      <div class="hist-label">RGB 直方图分布</div>
-      <canvas id="histogram" width="280" height="90"></canvas>
-    </div>
-
-    <dl id="info-list" class="info-list"></dl>
-
-    <div class="info-actions">
-      <button class="mini-btn" id="btn-reveal">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>
-        <span>在资源管理器中显示</span>
-      </button>
-    </div>
-  </aside>
-
-  <!-- 底部胶片条 -->
-  <div id="filmstrip"></div>
-</section>
-
-<!-- 照片细节对比工作台 (Compare Studio) -->
-<section id="compare-view" hidden>
-  <!-- 对比工具控制浮岛 -->
-  <div id="compare-dock" class="compare-dock">
-    <div class="compare-dock-group">
-      <div class="compare-title">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2">
-          <rect x="2" y="3" width="9" height="18" rx="2"/>
-          <rect x="13" y="3" width="9" height="18" rx="2"/>
-        </svg>
-        <span>细节对比</span>
-      </div>
-
-      <div class="dock-sep"></div>
-
-      <!-- 对比模式切换: 分屏 | 卷帘 | 闪烁 -->
-      <div class="compare-mode-pills" id="cmp-mode-pills">
-        <button class="cmp-pill active" data-cmp-mode="split" title="分屏并排对比">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="18" rx="1.5"/><rect x="13" y="3" width="8" height="18" rx="1.5"/></svg>
-          <span>分屏</span>
+      <div class="drag-spacer" data-tauri-drag-region></div>
+      <div class="win-controls">
+        <button class="win-btn" id="win-min" title="最小化" tabindex="-1">
+          <svg viewBox="0 0 10 10" width="10" height="10">
+            <path d="M0,5 L10,5" stroke="currentColor" stroke-width="1.1" />
+          </svg>
         </button>
-        <button class="cmp-pill" data-cmp-mode="curtain" title="卷帘滑动对比 (两图重叠拉动分割线)">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/><polyline points="10 10 8 12 10 14"/><polyline points="14 10 16 12 14 14"/></svg>
-          <span>卷帘</span>
+        <button class="win-btn" id="win-max" title="最大化/还原" tabindex="-1">
+          <svg viewBox="0 0 10 10" width="10" height="10">
+            <rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.1" rx="1" />
+          </svg>
         </button>
-        <button class="cmp-pill" data-cmp-mode="blink" title="A/B 闪烁对比 (按住 Tab 快速交替)">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 6 12 12 15 15"/></svg>
-          <span>A/B</span>
+        <button class="win-btn win-btn-close" id="win-close" title="关闭" tabindex="-1">
+          <svg viewBox="0 0 10 10" width="10" height="10">
+            <path d="M1.5,1.5 L8.5,8.5 M8.5,1.5 L1.5,8.5" stroke="currentColor" stroke-width="1.2" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div id="topbar-tools" class="tools" hidden>
+      <!-- 分段筛选器 -->
+      <div class="filters" id="filters">
+        <button class="chip active" data-filter="all">
+          <span>全部</span>
+          <b>0</b>
+        </button>
+        <button class="chip" data-filter="todo">
+          <span>待选</span>
+          <b>0</b>
+        </button>
+        <button class="chip chip-fav" data-filter="fav">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+          </svg>
+          <span>收藏</span>
+          <b>0</b>
+        </button>
+        <button class="chip chip-del" data-filter="del">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+          <span>已删</span>
+          <b>0</b>
         </button>
       </div>
 
-      <div class="dock-sep"></div>
+      <div class="spacer"></div>
 
-      <!-- 分屏布局快速切换: 左右 / 上下 / 3屏 / 4屏 -->
-      <div class="compare-layout-btns" id="cmp-layout-btns">
-        <button class="cmp-icon-btn active" data-cmp-layout="2-col" title="左右双屏">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="8" height="16" rx="1.5"/><rect x="13" y="4" width="8" height="16" rx="1.5"/></svg>
+      <!-- 专业工具按钮组 -->
+      <div class="tool-group">
+        <button class="icon-btn" id="btn-grid" title="网格视图 (G)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <rect x="3" y="3" width="7.5" height="7.5" rx="2" />
+            <rect x="13.5" y="3" width="7.5" height="7.5" rx="2" />
+            <rect x="3" y="13.5" width="7.5" height="7.5" rx="2" />
+            <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2" />
+          </svg>
         </button>
-        <button class="cmp-icon-btn" data-cmp-layout="2-row" title="上下双屏">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="8" rx="1.5"/><rect x="4" y="13" width="16" height="8" rx="1.5"/></svg>
+
+        <button class="icon-btn" id="btn-compare" title="细节对比工作台 (C)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="8" height="18" rx="2" />
+            <rect x="13" y="3" width="8" height="18" rx="2" />
+            <circle cx="7" cy="8" r="1.2" fill="currentColor" />
+            <circle cx="17" cy="8" r="1.2" fill="currentColor" />
+          </svg>
         </button>
-        <button class="cmp-icon-btn" data-cmp-layout="3-grid" title="三屏 (1 主 2 副)">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="9" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="13" width="7" height="7" rx="1.5"/></svg>
+
+        <div class="slider-wrap" title="缩略图大小">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <polyline points="21 15 16 10 5 21" />
+          </svg>
+          <input type="range" id="zoom-grid" min="120" max="420" step="10" />
+        </div>
+
+        <div class="divider"></div>
+
+        <button class="icon-btn" id="btn-refresh" title="刷新文件夹 (F5 / R)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19" />
+          </svg>
         </button>
-        <button class="cmp-icon-btn" data-cmp-layout="4-grid" title="2×2 四屏网格">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>
+
+        <button class="icon-btn" id="btn-open" title="打开其它文件夹">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            <line x1="12" y1="11" x2="12" y2="17" />
+            <line x1="9" y1="14" x2="15" y2="14" />
+          </svg>
         </button>
-        <button class="cmp-icon-btn" data-cmp-layout="6-grid" title="3×2 六屏网格">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="6" height="6" rx="1.2"/><rect x="9" y="5" width="6" height="6" rx="1.2"/><rect x="16" y="5" width="6" height="6" rx="1.2"/><rect x="2" y="13" width="6" height="6" rx="1.2"/><rect x="9" y="13" width="6" height="6" rx="1.2"/><rect x="16" y="13" width="6" height="6" rx="1.2"/></svg>
+
+        <button class="icon-btn" id="btn-theme" title="切换主题 (T)">
+          <svg class="icon-moon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+          </svg>
+          <svg class="icon-sun" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4" />
+            <line x1="12" y1="2" x2="12" y2="4" />
+            <line x1="12" y1="20" x2="12" y2="22" />
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+            <line x1="2" y1="12" x2="4" y2="12" />
+            <line x1="20" y1="12" x2="22" y2="12" />
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+          </svg>
+        </button>
+
+        <button class="icon-btn" id="btn-settings" title="偏好设置">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
+
+        <button class="icon-btn icon-btn-help" id="btn-help" title="快捷键 (?)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
         </button>
       </div>
-
-      <div class="dock-sep"></div>
-
-      <!-- 视口联动锁定开关 -->
-      <button class="cmp-btn-toggle active" id="btn-cmp-sync" title="视口联动缩放与平移 (S)">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-        <span>同步联动</span>
-      </button>
-
-      <!-- 100% 焦点对齐 -->
-      <button class="cmp-btn-tool" id="btn-cmp-100" title="100% 焦点对齐放大 (Z)">
-        <span class="z-label">1:1</span>
-        <span>焦点</span>
-      </button>
-
-      <!-- 适应屏幕重置 -->
-      <button class="cmp-btn-tool" id="btn-cmp-fit" title="适应屏幕">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
-        <span>适应</span>
-      </button>
-
-      <div class="dock-sep"></div>
-
-      <!-- 从相册选择/添加槽位 -->
-      <button class="cmp-btn-tool" id="btn-cmp-add" title="添加更多对比照片 (或直接拖入)">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        <span>添加</span>
-      </button>
-
-      <!-- 退出对比 -->
-      <button class="cmp-btn-close" id="btn-cmp-close" title="退出对比 (Esc)">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        <span>退出</span>
-      </button>
     </div>
-  </div>
+  </header>
 
-  <!-- 分屏对比舞台容器 -->
-  <div id="compare-split-stage" class="compare-split-stage layout-2-col"></div>
-
-  <!-- 卷帘对比舞台容器 -->
-  <div id="compare-curtain-stage" class="compare-curtain-stage" hidden>
-    <div class="curtain-box" id="curtain-box">
-      <div class="curtain-layer layer-b" id="curtain-layer-b">
-        <img id="curtain-img-b" alt="" draggable="false" />
-        <div class="curtain-badge badge-b" id="curtain-badge-b">照片 B</div>
-      </div>
-      <div class="curtain-layer layer-a" id="curtain-layer-a">
-        <img id="curtain-img-a" alt="" draggable="false" />
-        <div class="curtain-badge badge-a" id="curtain-badge-a">照片 A</div>
-      </div>
-      <!-- 可拖动分割线与手柄 -->
-      <div class="curtain-divider" id="curtain-divider">
-        <div class="curtain-line"></div>
-        <div class="curtain-knob">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-            <path d="M8.5 7l-5 5 5 5V7zm7 0v10l5-5-5-5z"/>
+  <!-- 空状态 / 拖入引导区 -->
+  <section id="empty">
+    <div class="empty-glow"></div>
+    <div class="empty-card">
+      <div class="empty-icon-wrap">
+        <div class="empty-icon-ring"></div>
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.6"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+            <circle cx="12" cy="13" r="4" />
+            <path d="M12 11.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z" fill="currentColor" />
           </svg>
         </div>
       </div>
+
+      <h1 class="empty-title">开启专业选片工作流</h1>
+      <p class="empty-desc">将相机存储卡或照片文件夹拖拽至此 · 支持 RAW 秒级内嵌高清预览提取</p>
+
+      <div class="format-badges">
+        <span class="badge-raw">NEF</span>
+        <span class="badge-raw">NRW</span>
+        <span class="badge-raw">CR2 / CR3</span>
+        <span class="badge-raw">ARW</span>
+        <span class="badge-raw">DNG</span>
+        <span class="badge-raw">RAF</span>
+        <span class="badge-jpg">JPG / JPEG</span>
+      </div>
+
+      <button class="btn-primary" id="btn-choose">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          <line x1="12" y1="11" x2="12" y2="17" />
+          <line x1="9" y1="14" x2="15" y2="14" />
+        </svg>
+        <span>选择照片文件夹</span>
+      </button>
+
+      <div id="recent" class="recent"></div>
     </div>
-  </div>
+  </section>
 
-  <!-- A/B 闪烁对比舞台容器 -->
-  <div id="compare-blink-stage" class="compare-blink-stage" hidden>
-    <div class="blink-box" id="blink-box">
-      <img id="blink-img" alt="" draggable="false" />
-      <div class="blink-indicator" id="blink-indicator">
-        <span class="blink-tag blink-a active" id="blink-tag-a">照片 A</span>
-        <span class="blink-tag blink-b" id="blink-tag-b">照片 B</span>
-        <span class="blink-tip">轻按或长按 <kbd>Tab</kbd> / <kbd>Space</kbd> 极速交替</span>
-      </div>
+  <!-- 网格选片视图 -->
+  <main id="grid-view" hidden>
+    <div id="grid-scroll">
+      <div id="grid-canvas"></div>
     </div>
-  </div>
-
-  <!-- 对比底部候补胶片条 / 托盘 -->
-  <div id="compare-filmstrip" class="compare-filmstrip"></div>
-</section>
-
-<!-- 悬浮控制坞 (Floating Action Dock) -->
-<div id="actionbar" hidden>
-  <div class="dock-inner">
-    <button class="act act-fav" id="act-fav">
-      <svg class="act-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-      <span class="k">F</span>
-      <span class="act-text">收藏</span>
-    </button>
-    
-    <button class="act act-del" id="act-del">
-      <svg class="act-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-      <span class="k">X</span>
-      <span class="act-text">删除</span>
-    </button>
-    
-    <button class="act act-undo" id="act-undo">
-      <svg class="act-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
-      <span class="k">Ctrl+Z</span>
-      <span class="act-text">撤销</span>
-    </button>
-
-    <div class="dock-divider"></div>
-
-    <div class="counter" id="counter"></div>
-  </div>
-</div>
-
-<!-- 浮动通知容器 -->
-<div id="toast-wrap"></div>
-
-<!-- 偏好设置弹窗 -->
-<div id="settings-modal" class="modal" hidden>
-  <div class="modal-card">
-    <div class="modal-header">
-      <div class="modal-title-group">
-        <h2>偏好设置</h2>
-        <p class="modal-subtitle">自定义选片工作流与存储规则</p>
-      </div>
-      <button class="modal-close-btn" id="btn-x-settings" title="关闭 (Esc)">✕</button>
-    </div>
-
-    <div class="modal-body">
-      <div class="setting-group-title">外观与显示</div>
-      <div class="setting-row">
-        <div class="setting-label">
-          <span class="setting-name">界面主题风格</span>
-          <span class="setting-desc">切换深邃暗房或影棚明亮模式</span>
-        </div>
-        <select id="set-theme" class="modern-select">
-          <option value="dark">暗色主题 (Obsidian Dark)</option>
-          <option value="light">亮色主题 (Studio Light)</option>
-          <option value="system">跟随系统设置 (Auto)</option>
-        </select>
-      </div>
-
-      <div class="setting-group-title">文件与格式</div>
-      <div class="setting-row">
-        <div class="setting-label">
-          <span class="setting-name">收藏文件夹名称</span>
-          <span class="setting-desc">在相册根目录创建并存放收藏照片的子文件夹</span>
-        </div>
-        <input type="text" id="set-favname" class="modern-input" placeholder="收藏" />
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-label">
-          <span class="setting-name">RAW + JPG 同名合并</span>
-          <span class="setting-desc">自动合并同名的 RAW 与 JPG 文件为单张展示</span>
-        </div>
-        <label class="switch-toggle">
-          <input type="checkbox" id="set-group" />
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-label">
-          <span class="setting-name">递归扫描子文件夹</span>
-          <span class="setting-desc">同时加载所选目录下的所有子目录图片</span>
-        </div>
-        <label class="switch-toggle">
-          <input type="checkbox" id="set-recursive" />
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="setting-group-title">自动化选片操作</div>
-      <div class="setting-row">
-        <div class="setting-label">
-          <span class="setting-name">收藏后自动跳下一张</span>
-          <span class="setting-desc">移入收藏夹后立即自动加载并显示下一张照片</span>
-        </div>
-        <label class="switch-toggle">
-          <input type="checkbox" id="set-adv-fav" />
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-label">
-          <span class="setting-name">删除后自动跳下一张</span>
-          <span class="setting-desc">删除当前照片后自动跳到下一张</span>
-        </div>
-        <label class="switch-toggle">
-          <input type="checkbox" id="set-adv-del" />
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-label">
-          <span class="setting-name">删除前二次确认</span>
-          <span class="setting-desc">防止误按删除键（已移至回收站随时可撤销）</span>
-        </div>
-        <label class="switch-toggle">
-          <input type="checkbox" id="set-confirm" />
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="setting-group-title">软件与版本</div>
-      <div class="version-row">
-        <div class="setting-label">
-          <span class="setting-name">当前版本</span>
-          <span class="setting-desc">检查获取最新功能与性能优化</span>
-        </div>
-        <div class="version-action-group">
-          <span class="version-tag" id="app-version">v1.5.0</span>
-          <button class="mini-btn" id="btn-check-update">检查新版本</button>
-        </div>
-      </div>
-
-      <div class="hint-card">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-        <span>收藏操作将照片（及同名 RAW/JPG 配对文件）移入相册根目录的「收藏」文件夹中，支持随时撤销移回。删除照片将进入 Windows 回收站，支持随时 <kbd>Ctrl+Z</kbd> 撤销还原。</span>
-      </div>
-    </div>
-
-    <div class="modal-actions">
-      <button class="mini-btn" id="btn-clear-cache">清空缩略图缓存</button>
-      <div class="spacer"></div>
-      <button class="btn-primary" id="btn-close-settings">完成设置</button>
-    </div>
-  </div>
-</div>
-
-<!-- 自动更新弹窗 -->
-<div id="update-modal" class="modal" hidden>
-  <div class="modal-card update-card">
-    <div class="update-header">
-      <div class="update-icon-glow">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="7 10 12 15 17 10"/>
-          <line x1="12" y1="15" x2="12" y2="3"/>
+    <div id="grid-empty" class="view-empty" hidden>
+      <div class="empty-state-icon">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.6">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M16 16s-1.5-2-4-2-4 2-4 2" />
+          <line x1="9" y1="9" x2="9.01" y2="9" />
+          <line x1="15" y1="9" x2="15.01" y2="9" />
         </svg>
       </div>
-      <div>
-        <h2>发现新版本 <span id="update-new-version" class="accent-badge"></span></h2>
-        <p class="update-sub" id="update-release-date"></p>
-      </div>
+      <span>当前筛选条件下没有照片</span>
     </div>
-    
-    <div class="update-body">
-      <div class="update-notes-title">更新说明</div>
-      <div class="update-notes" id="update-notes-content"></div>
+  </main>
+
+  <!-- 大图看片视图 -->
+  <section id="loupe" hidden>
+    <div id="stage">
+      <img id="loupe-img" alt="" draggable="false" />
+      <div id="loupe-loading" class="loupe-loading">
+        <div class="spinner-ring"></div>
+        <span class="spinner-text">加载高清原图…</span>
+      </div>
+      <div id="loupe-error" class="loupe-error" hidden></div>
+      <div id="stage-badges" class="stage-badges"></div>
+      <div id="zoom-hint" class="zoom-hint" hidden>100%</div>
+
+      <button class="nav-arrow left" id="nav-prev" title="上一张 (←)">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5"
+          stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 18 9 12 15 6" />
+        </svg>
+      </button>
+      <button class="nav-arrow right" id="nav-next" title="下一张 (→)">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5"
+          stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+      </button>
     </div>
 
-    <!-- 下载进度条 -->
-    <div id="update-progress-wrap" class="update-progress-wrap" hidden>
-      <div class="progress-labels">
-        <span id="update-progress-status">正在下载更新…</span>
-        <span id="update-progress-pct">0%</span>
+    <!-- EXIF / HUD 参数侧边栏 -->
+    <aside id="info-panel">
+      <div class="info-head">
+        <div class="info-tag-row">
+          <span class="info-badge">EXIF 摄影数据</span>
+        </div>
+        <div id="info-name" class="info-name"></div>
+        <div id="info-sub" class="info-sub"></div>
       </div>
-      <div class="progress-track">
-        <div id="update-progress-bar" class="progress-fill" style="width: 0%;"></div>
+
+      <div class="hist-card">
+        <div class="hist-label">RGB 直方图分布</div>
+        <canvas id="histogram" width="280" height="90"></canvas>
+      </div>
+
+      <dl id="info-list" class="info-list"></dl>
+
+      <div class="info-actions">
+        <button class="mini-btn" id="btn-reveal">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <path
+              d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+          </svg>
+          <span>在资源管理器中显示</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- 底部胶片条 -->
+    <div id="filmstrip"></div>
+  </section>
+
+  <!-- 照片细节对比工作台 (Compare Studio) -->
+  <section id="compare-view" hidden>
+    <!-- 对比工具控制浮岛 -->
+    <div id="compare-dock" class="compare-dock">
+      <div class="compare-dock-group">
+        <div class="compare-title">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2">
+            <rect x="2" y="3" width="9" height="18" rx="2" />
+            <rect x="13" y="3" width="9" height="18" rx="2" />
+          </svg>
+          <span>细节对比</span>
+        </div>
+
+        <div class="dock-sep"></div>
+
+        <!-- 对比模式切换: 分屏 | 卷帘 | 闪烁 -->
+        <div class="compare-mode-pills" id="cmp-mode-pills">
+          <button class="cmp-pill active" data-cmp-mode="split" title="分屏并排对比">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="8" height="18" rx="1.5" />
+              <rect x="13" y="3" width="8" height="18" rx="1.5" />
+            </svg>
+            <span>分屏</span>
+          </button>
+          <button class="cmp-pill" data-cmp-mode="curtain" title="卷帘滑动对比 (两图重叠拉动分割线)">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="12" y1="3" x2="12" y2="21" />
+              <polyline points="10 10 8 12 10 14" />
+              <polyline points="14 10 16 12 14 14" />
+            </svg>
+            <span>卷帘</span>
+          </button>
+          <button class="cmp-pill" data-cmp-mode="blink" title="A/B 闪烁对比 (按住 Tab 快速交替)">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="9" />
+              <polyline points="12 6 12 12 15 15" />
+            </svg>
+            <span>A/B</span>
+          </button>
+        </div>
+
+        <div class="dock-sep"></div>
+
+        <!-- 分屏布局快速切换: 左右 / 上下 / 3屏 / 4屏 -->
+        <div class="compare-layout-btns" id="cmp-layout-btns">
+          <button class="cmp-icon-btn active" data-cmp-layout="2-col" title="左右双屏">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="8" height="16" rx="1.5" />
+              <rect x="13" y="4" width="8" height="16" rx="1.5" />
+            </svg>
+          </button>
+          <button class="cmp-icon-btn" data-cmp-layout="2-row" title="上下双屏">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="4" y="3" width="16" height="8" rx="1.5" />
+              <rect x="4" y="13" width="16" height="8" rx="1.5" />
+            </svg>
+          </button>
+          <button class="cmp-icon-btn" data-cmp-layout="3-grid" title="三屏 (1 主 2 副)">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="9" height="16" rx="1.5" />
+              <rect x="14" y="4" width="7" height="7" rx="1.5" />
+              <rect x="14" y="13" width="7" height="7" rx="1.5" />
+            </svg>
+          </button>
+          <button class="cmp-icon-btn" data-cmp-layout="4-grid" title="2×2 四屏网格">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="8" height="8" rx="1.5" />
+              <rect x="13" y="3" width="8" height="8" rx="1.5" />
+              <rect x="3" y="13" width="8" height="8" rx="1.5" />
+              <rect x="13" y="13" width="8" height="8" rx="1.5" />
+            </svg>
+          </button>
+          <button class="cmp-icon-btn" data-cmp-layout="6-grid" title="3×2 六屏网格">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="5" width="6" height="6" rx="1.2" />
+              <rect x="9" y="5" width="6" height="6" rx="1.2" />
+              <rect x="16" y="5" width="6" height="6" rx="1.2" />
+              <rect x="2" y="13" width="6" height="6" rx="1.2" />
+              <rect x="9" y="13" width="6" height="6" rx="1.2" />
+              <rect x="16" y="13" width="6" height="6" rx="1.2" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="dock-sep"></div>
+
+        <!-- 视口联动锁定开关 -->
+        <button class="cmp-btn-toggle active" id="btn-cmp-sync" title="视口联动缩放与平移 (S)">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+          </svg>
+          <span>同步联动</span>
+        </button>
+
+        <!-- 100% 焦点对齐 -->
+        <button class="cmp-btn-tool" id="btn-cmp-100" title="100% 焦点对齐放大 (Z)">
+          <span class="z-label">1:1</span>
+          <span>焦点</span>
+        </button>
+
+        <!-- 适应屏幕重置 -->
+        <button class="cmp-btn-tool" id="btn-cmp-fit" title="适应屏幕">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 3 21 3 21 9" />
+            <polyline points="9 21 3 21 3 15" />
+            <line x1="21" y1="3" x2="14" y2="10" />
+            <line x1="3" y1="21" x2="10" y2="14" />
+          </svg>
+          <span>适应</span>
+        </button>
+
+        <div class="dock-sep"></div>
+
+        <!-- 从相册选择/添加槽位 -->
+        <button class="cmp-btn-tool" id="btn-cmp-add" title="添加更多对比照片 (或直接拖入)">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          <span>添加</span>
+        </button>
+
+        <!-- 退出对比 -->
+        <button class="cmp-btn-close" id="btn-cmp-close" title="退出对比 (Esc)">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+          <span>退出</span>
+        </button>
       </div>
     </div>
 
-    <div class="modal-actions">
-      <button class="mini-btn" id="btn-update-cancel">稍后</button>
-      <div class="spacer"></div>
-      <button class="btn-primary" id="btn-update-action">立即更新</button>
+    <!-- 分屏对比舞台容器 -->
+    <div id="compare-split-stage" class="compare-split-stage layout-2-col"></div>
+
+    <!-- 卷帘对比舞台容器 -->
+    <div id="compare-curtain-stage" class="compare-curtain-stage" hidden>
+      <div class="curtain-box" id="curtain-box">
+        <div class="curtain-layer layer-b" id="curtain-layer-b">
+          <img id="curtain-img-b" alt="" draggable="false" />
+          <div class="curtain-badge badge-b" id="curtain-badge-b">照片 B</div>
+        </div>
+        <div class="curtain-layer layer-a" id="curtain-layer-a">
+          <img id="curtain-img-a" alt="" draggable="false" />
+          <div class="curtain-badge badge-a" id="curtain-badge-a">照片 A</div>
+        </div>
+        <!-- 可拖动分割线与手柄 -->
+        <div class="curtain-divider" id="curtain-divider">
+          <div class="curtain-line"></div>
+          <div class="curtain-knob">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+              <path d="M8.5 7l-5 5 5 5V7zm7 0v10l5-5-5-5z" />
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- A/B 闪烁对比舞台容器 -->
+    <div id="compare-blink-stage" class="compare-blink-stage" hidden>
+      <div class="blink-box" id="blink-box">
+        <img id="blink-img" alt="" draggable="false" />
+        <div class="blink-indicator" id="blink-indicator">
+          <span class="blink-tag blink-a active" id="blink-tag-a">照片 A</span>
+          <span class="blink-tag blink-b" id="blink-tag-b">照片 B</span>
+          <span class="blink-tip">轻按或长按 <kbd>Tab</kbd> / <kbd>Space</kbd> 极速交替</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 对比底部候补胶片条 / 托盘 -->
+    <div id="compare-filmstrip" class="compare-filmstrip"></div>
+  </section>
+
+  <!-- 悬浮控制坞 (Floating Action Dock) -->
+  <div id="actionbar" hidden>
+    <div class="dock-inner">
+      <button class="act act-fav" id="act-fav">
+        <svg class="act-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+          <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+        </svg>
+        <span class="k">F</span>
+        <span class="act-text">收藏</span>
+      </button>
+
+      <button class="act act-del" id="act-del">
+        <svg class="act-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+          stroke-width="2">
+          <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+        </svg>
+        <span class="k">X</span>
+        <span class="act-text">删除</span>
+      </button>
+
+      <button class="act act-undo" id="act-undo">
+        <svg class="act-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+          stroke-width="2">
+          <polyline points="1 4 1 10 7 10" />
+          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+        </svg>
+        <span class="k">Ctrl+Z</span>
+        <span class="act-text">撤销</span>
+      </button>
+
+      <div class="dock-divider"></div>
+
+      <div class="counter" id="counter"></div>
     </div>
   </div>
-</div>
 
-<!-- 快捷键帮助弹窗 -->
-<div id="help-modal" class="modal" hidden>
-  <div class="modal-card help-card">
-    <div class="modal-header">
-      <div class="modal-title-group">
-        <h2>快捷键指南</h2>
-        <p class="modal-subtitle">极速掌控摄影师键盘选片流</p>
-      </div>
-      <button class="modal-close-btn" id="btn-x-help" title="关闭 (Esc)">✕</button>
-    </div>
+  <!-- 浮动通知容器 -->
+  <div id="toast-wrap"></div>
 
-    <div class="keys-grid">
-      <div class="key-col">
-        <div class="key-col-title">导航与浏览</div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>←</kbd><kbd>→</kbd></div><span>上一张 / 下一张</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>Enter</kbd><kbd>Space</kbd></div><span>网格 / 大图秒切</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>Esc</kbd></div><span>返回网格视图</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>Home</kbd><kbd>End</kbd></div><span>跳至第一张 / 末尾</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>Z</kbd><kbd>单击</kbd></div><span>100% 焦点对齐放大</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>滚轮</kbd></div><span>缩放 / 滚动视图</span></div>
+  <!-- 偏好设置弹窗 -->
+  <div id="settings-modal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h2>偏好设置</h2>
+          <p class="modal-subtitle">自定义选片工作流与存储规则</p>
+        </div>
+        <button class="modal-close-btn" id="btn-x-settings" title="关闭 (Esc)">✕</button>
       </div>
 
-      <div class="key-col">
-        <div class="key-col-title">选片与动作</div>
-        <div class="key-item"><div class="kbd-wrap"><kbd class="kbd-gold">F</kbd></div><span>标记 / 取消收藏</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd class="kbd-rose">X</kbd><kbd>Del</kbd></div><span>移至回收站</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>Ctrl</kbd>+<kbd>Z</kbd></div><span>撤销上一步动作</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>1</kbd>–<kbd>4</kbd></div><span>全部 / 待选 / 收藏 / 已删</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>I</kbd></div><span>显示 / 隐藏 EXIF 面板</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>T</kbd></div><span>切换暗色 / 亮色主题</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>F5</kbd><kbd>R</kbd></div><span>刷新文件夹内容</span></div>
+      <div class="modal-body">
+        <div class="setting-group-title">外观与显示</div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <span class="setting-name">界面主题风格</span>
+            <span class="setting-desc">切换深邃暗房或影棚明亮模式</span>
+          </div>
+          <select id="set-theme" class="modern-select">
+            <option value="dark">暗色主题 (Obsidian Dark)</option>
+            <option value="light">亮色主题 (Studio Light)</option>
+            <option value="system">跟随系统设置 (Auto)</option>
+          </select>
+        </div>
+
+        <div class="setting-group-title">文件与格式</div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <span class="setting-name">收藏文件夹名称</span>
+            <span class="setting-desc">在相册根目录创建并存放收藏照片的子文件夹</span>
+          </div>
+          <input type="text" id="set-favname" class="modern-input" placeholder="收藏" />
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <span class="setting-name">RAW + JPG 同名合并</span>
+            <span class="setting-desc">自动合并同名的 RAW 与 JPG 文件为单张展示</span>
+          </div>
+          <label class="switch-toggle">
+            <input type="checkbox" id="set-group" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <span class="setting-name">递归扫描子文件夹</span>
+            <span class="setting-desc">同时加载所选目录下的所有子目录图片</span>
+          </div>
+          <label class="switch-toggle">
+            <input type="checkbox" id="set-recursive" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-group-title">自动化选片操作</div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <span class="setting-name">收藏后自动跳下一张</span>
+            <span class="setting-desc">移入收藏夹后立即自动加载并显示下一张照片</span>
+          </div>
+          <label class="switch-toggle">
+            <input type="checkbox" id="set-adv-fav" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <span class="setting-name">删除后自动跳下一张</span>
+            <span class="setting-desc">删除当前照片后自动跳到下一张</span>
+          </div>
+          <label class="switch-toggle">
+            <input type="checkbox" id="set-adv-del" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <span class="setting-name">删除前二次确认</span>
+            <span class="setting-desc">防止误按删除键（已移至回收站随时可撤销）</span>
+          </div>
+          <label class="switch-toggle">
+            <input type="checkbox" id="set-confirm" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-group-title">软件与版本</div>
+        <div class="version-row">
+          <div class="setting-label">
+            <span class="setting-name">当前版本</span>
+            <span class="setting-desc">检查获取最新功能与性能优化</span>
+          </div>
+          <div class="version-action-group">
+            <span class="version-tag" id="app-version">--</span>
+            <button class="mini-btn" id="btn-check-update">检查新版本</button>
+          </div>
+        </div>
+
+        <div class="hint-card">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+          <span>收藏操作将照片（及同名 RAW/JPG 配对文件）移入相册根目录的「收藏」文件夹中，支持随时撤销移回。删除照片将进入 Windows 回收站，支持随时 <kbd>Ctrl+Z</kbd>
+            撤销还原。</span>
+        </div>
       </div>
 
-      <div class="key-col">
-        <div class="key-col-title">细节对比工作台</div>
-        <div class="key-item"><div class="kbd-wrap"><kbd class="kbd-accent">C</kbd></div><span>进入 / 退出细节对比</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>S</kbd></div><span>切换视口同步联动</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>Z</kbd></div><span>全部 100% (1:1) 焦点对齐</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>Tab</kbd></div><span>A/B 闪烁快速交替</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>F</kbd></div><span>收藏 / 取消收藏当前槽位</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>W</kbd></div><span>胜出裁决 (保留胜出者)</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>X</kbd><kbd>Del</kbd></div><span>把当前槽位移出对比</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>1</kbd>–<kbd>6</kbd></div><span>切换激活槽位</span></div>
-        <div class="key-item"><div class="kbd-wrap"><kbd>Esc</kbd></div><span>退出对比返回</span></div>
+      <div class="modal-actions">
+        <button class="mini-btn" id="btn-clear-cache">清空缩略图缓存</button>
+        <div class="spacer"></div>
+        <button class="btn-primary" id="btn-close-settings">完成设置</button>
       </div>
-    </div>
-
-    <div class="modal-actions">
-      <div class="spacer"></div>
-      <button class="btn-primary" id="btn-close-help">掌握了</button>
     </div>
   </div>
-</div>
 
-<!-- 拖入覆盖层 -->
-<div id="drop-overlay" hidden>
-  <div class="drop-content">
-    <div class="drop-icon">
-      <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+  <!-- 自动更新弹窗 -->
+  <div id="update-modal" class="modal" hidden>
+    <div class="modal-card update-card">
+      <div class="update-header">
+        <div class="update-icon-glow">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </div>
+        <div>
+          <h2>发现新版本 <span id="update-new-version" class="accent-badge"></span></h2>
+          <p class="update-sub" id="update-release-date"></p>
+        </div>
+      </div>
+
+      <div class="update-body">
+        <div class="update-notes-title">更新说明</div>
+        <div class="update-notes" id="update-notes-content"></div>
+      </div>
+
+      <!-- 下载进度条 -->
+      <div id="update-progress-wrap" class="update-progress-wrap" hidden>
+        <div class="progress-labels">
+          <span id="update-progress-status">正在下载更新…</span>
+          <span id="update-progress-pct">0%</span>
+        </div>
+        <div class="progress-track">
+          <div id="update-progress-bar" class="progress-fill" style="width: 0%;"></div>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="mini-btn" id="btn-update-cancel">稍后</button>
+        <div class="spacer"></div>
+        <button class="btn-primary" id="btn-update-action">立即更新</button>
+      </div>
     </div>
-    <div class="drop-title">松开鼠标即可载入照片</div>
-    <div class="drop-sub">支持直接拖入目录或任意照片文件</div>
   </div>
-</div>
 
-<script src="tauri-bridge.js"></script>
-<script type="module" src="app.js"></script>
+  <!-- 快捷键帮助弹窗 -->
+  <div id="help-modal" class="modal" hidden>
+    <div class="modal-card help-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h2>快捷键指南</h2>
+          <p class="modal-subtitle">极速掌控摄影师键盘选片流</p>
+        </div>
+        <button class="modal-close-btn" id="btn-x-help" title="关闭 (Esc)">✕</button>
+      </div>
+
+      <div class="keys-grid">
+        <div class="key-col">
+          <div class="key-col-title">导航与浏览</div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>←</kbd><kbd>→</kbd></div><span>上一张 / 下一张</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>Enter</kbd><kbd>Space</kbd></div><span>网格 / 大图秒切</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>Esc</kbd></div><span>返回网格视图</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>Home</kbd><kbd>End</kbd></div><span>跳至第一张 / 末尾</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>Z</kbd><kbd>单击</kbd></div><span>100% 焦点对齐放大</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>滚轮</kbd></div><span>缩放 / 滚动视图</span>
+          </div>
+        </div>
+
+        <div class="key-col">
+          <div class="key-col-title">选片与动作</div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd class="kbd-gold">F</kbd></div><span>标记 / 取消收藏</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd class="kbd-rose">X</kbd><kbd>Del</kbd></div><span>移至回收站</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>Ctrl</kbd>+<kbd>Z</kbd></div><span>撤销上一步动作</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>1</kbd>–<kbd>4</kbd></div><span>全部 / 待选 / 收藏 / 已删</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>I</kbd></div><span>显示 / 隐藏 EXIF 面板</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>T</kbd></div><span>切换暗色 / 亮色主题</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>F5</kbd><kbd>R</kbd></div><span>刷新文件夹内容</span>
+          </div>
+        </div>
+
+        <div class="key-col">
+          <div class="key-col-title">细节对比工作台</div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd class="kbd-accent">C</kbd></div><span>进入 / 退出细节对比</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>S</kbd></div><span>切换视口同步联动</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>Z</kbd></div><span>全部 100% (1:1) 焦点对齐</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>Tab</kbd></div><span>A/B 闪烁快速交替</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>F</kbd></div><span>收藏 / 取消收藏当前槽位</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>W</kbd></div><span>胜出裁决 (保留胜出者)</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>X</kbd><kbd>Del</kbd></div><span>把当前槽位移出对比</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>1</kbd>–<kbd>6</kbd></div><span>切换激活槽位</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd>Esc</kbd></div><span>退出对比返回</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <div class="spacer"></div>
+        <button class="btn-primary" id="btn-close-help">掌握了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 拖入覆盖层 -->
+  <div id="drop-overlay" hidden>
+    <div class="drop-content">
+      <div class="drop-icon">
+        <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="17 8 12 3 7 8" />
+          <line x1="12" y1="3" x2="12" y2="15" />
+        </svg>
+      </div>
+      <div class="drop-title">松开鼠标即可载入照片</div>
+      <div class="drop-sub">支持直接拖入目录或任意照片文件</div>
+    </div>
+  </div>
+
+  <script src="tauri-bridge.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
+
 </html>
