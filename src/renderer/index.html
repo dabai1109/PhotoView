@@ -12,6 +12,20 @@
 
 <body>
 
+  <!-- 智能去灰与动态通透滤镜引擎 (GPU 硬件加速) -->
+  <svg id="pv-dehaze-svg" style="display:none;position:absolute;width:0;height:0;" aria-hidden="true">
+    <defs>
+      <filter id="pv-dehaze-filter" color-interpolation-filters="sRGB">
+        <feComponentTransfer id="pv-dehaze-transfer">
+          <feFuncR id="pv-dehaze-func-r" type="table" tableValues="0 0.02 0.05 0.1 0.16 0.23 0.31 0.4 0.49 0.58 0.67 0.76 0.84 0.91 0.96 1" />
+          <feFuncG id="pv-dehaze-func-g" type="table" tableValues="0 0.02 0.05 0.1 0.16 0.23 0.31 0.4 0.49 0.58 0.67 0.76 0.84 0.91 0.96 1" />
+          <feFuncB id="pv-dehaze-func-b" type="table" tableValues="0 0.02 0.05 0.1 0.16 0.23 0.31 0.4 0.49 0.58 0.67 0.76 0.84 0.91 0.96 1" />
+        </feComponentTransfer>
+        <feColorMatrix type="saturate" values="1.08" />
+      </filter>
+    </defs>
+  </svg>
+
   <!-- 顶栏 / 导航 -->
   <header id="topbar" data-tauri-drag-region>
     <div class="drag-zone" data-tauri-drag-region>
@@ -94,6 +108,14 @@
             <rect x="13" y="3" width="8" height="18" rx="2" />
             <circle cx="7" cy="8" r="1.2" fill="currentColor" />
             <circle cx="17" cy="8" r="1.2" fill="currentColor" />
+          </svg>
+        </button>
+
+        <button class="icon-btn" id="btn-dehaze" title="照片智能去灰 (H)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z" />
+            <path d="M5 3v4M3 5h4M19 17v4M17 19h4" />
           </svg>
         </button>
 
@@ -394,6 +416,25 @@
             <line x1="3" y1="21" x2="10" y2="14" />
           </svg>
           <span>适应</span>
+        </button>
+
+        <div class="dock-sep"></div>
+
+        <!-- 一键「原片 ⇄ 去灰」对比 -->
+        <button class="cmp-btn-tool" id="btn-cmp-dehaze-pair" title="一键将当前照片以「原片 ⇄ 去灰」展开对比 (卷帘/分屏)">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>
+          </svg>
+          <span>原片⇄去灰</span>
+        </button>
+
+        <!-- 对比槽位去灰增强开关 -->
+        <button class="cmp-btn-toggle" id="btn-cmp-dehaze-toggle" title="切换对比槽位去灰增强 (H)">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+            <circle cx="12" cy="12" r="3" fill="currentColor" opacity="0.3" />
+          </svg>
+          <span>去灰</span>
         </button>
 
         <div class="dock-sep"></div>
@@ -718,12 +759,18 @@
           <div class="key-item">
             <div class="kbd-wrap"><kbd>F5</kbd><kbd>R</kbd></div><span>刷新文件夹内容</span>
           </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd class="kbd-accent">H</kbd></div><span>照片智能去灰 (开/关)</span>
+          </div>
         </div>
 
         <div class="key-col">
           <div class="key-col-title">细节对比工作台</div>
           <div class="key-item">
             <div class="kbd-wrap"><kbd class="kbd-accent">C</kbd></div><span>进入 / 退出细节对比</span>
+          </div>
+          <div class="key-item">
+            <div class="kbd-wrap"><kbd class="kbd-accent">H</kbd></div><span>切换对比槽位去灰</span>
           </div>
           <div class="key-item">
             <div class="kbd-wrap"><kbd>S</kbd></div><span>切换视口同步联动</span>

@@ -21,6 +21,7 @@ const S = {
   settings: {},
   session: { favorites: [], cursor: 0 },
   undo: [],
+  dehaze: { active: false, curHist: null },
   loupe: { url: null, zoom: 1, fit: 1, panX: 0, panY: 0, o: 1, srcW: 0, srcH: 0, natW: 0, natH: 0, token: 0 },
   compare: {
     items: [],
@@ -661,6 +662,166 @@ function showLoupe() {
 }
 
 /* ==========================================================================
+   智能去灰与动态通透引擎 (Dehaze & Adaptive Clarity Engine)
+   ========================================================================== */
+
+/**
+ * 智能通透/去灰曲线生成器 (基于直方图自适应拉伸与保高光非对称 S 曲线)
+ * @param {Object} hist 直方图数据 { r, g, b, l }
+ * @returns {string} 适用于 SVG feFuncR/G/B 的 tableValues 空格分隔浮点数字符串
+ */
+function computeDehazeCurve(hist) {
+  const SAMPLES = 33; // 33 个等分采样点 (步长 1/32)
+  const luma = hist && Array.isArray(hist.l) ? hist.l : null;
+
+  let blackPt = 0;
+  let whitePt = 255;
+
+  if (luma && luma.length === 256) {
+    let total = 0;
+    for (let i = 0; i < 256; i++) total += luma[i];
+
+    if (total > 0) {
+      // 动态黑白场分位阈值：前 0.6% 为黑场锚点，后 0.4% 为高光锚点
+      const blackCut = total * 0.006;
+      const whiteCut = total * 0.004;
+
+      let cum = 0;
+      for (let i = 0; i < 256; i++) {
+        cum += luma[i];
+        if (cum >= blackCut) {
+          blackPt = i;
+          break;
+        }
+      }
+
+      cum = 0;
+      for (let i = 255; i >= 0; i--) {
+        cum += luma[i];
+        if (cum >= whiteCut) {
+          whitePt = i;
+          break;
+        }
+      }
+    }
+  }
+
+  // 安全钳位：防止极端照片过冲失真
+  const safeBlack = Math.min(blackPt, 55);
+  const safeWhite = Math.max(whitePt, 200);
+  const range = Math.max(60, safeWhite - safeBlack);
+
+  const values = [];
+  for (let k = 0; k < SAMPLES; k++) {
+    const normIn = k / (SAMPLES - 1); // 0.0 ~ 1.0
+    const rawVal = normIn * 255;
+
+    // 1. 黑白场动态线性拉伸
+    let stretched = (rawVal - safeBlack) / range;
+    stretched = Math.max(0, Math.min(1, stretched));
+
+    // 2. 非对称保高光 S 曲线 (暗部下潜压实消除灰蒙，中间调拉开反差，高光软滚降防过曝)
+    let sVal;
+    if (stretched < 0.5) {
+      sVal = 0.5 * Math.pow(2 * stretched, 1.22);
+    } else {
+      sVal = 1 - 0.5 * Math.pow(2 * (1 - stretched), 1.12);
+    }
+
+    // 3. 适度混入，保留自然渐变
+    const finalVal = stretched * 0.15 + sVal * 0.85;
+    values.push(Math.max(0, Math.min(1, finalVal)).toFixed(4));
+  }
+
+  return values.join(' ');
+}
+
+function updateDehazeFilter(hist) {
+  S.dehaze.curHist = hist;
+  const tableValues = computeDehazeCurve(hist);
+  const fr = $('#pv-dehaze-func-r');
+  const fg = $('#pv-dehaze-func-g');
+  const fb = $('#pv-dehaze-func-b');
+  if (fr && fr.setAttribute) fr.setAttribute('tableValues', tableValues);
+  if (fg && fg.setAttribute) fg.setAttribute('tableValues', tableValues);
+  if (fb && fb.setAttribute) fb.setAttribute('tableValues', tableValues);
+}
+
+function toggleDehaze() {
+  S.dehaze.active = !S.dehaze.active;
+  syncDehazeUI();
+  if (S.dehaze.active) {
+    toast('✨ 已开启照片智能去灰 (自适应动态通透)');
+  } else {
+    toast('已恢复原片色彩');
+  }
+}
+
+function toggleCompareDehaze() {
+  S.dehaze.active = !S.dehaze.active;
+  syncDehazeUI();
+  toast(S.dehaze.active ? '✨ 对比槽位已开启去灰增强' : '对比槽位已恢复原片色彩');
+}
+
+function syncDehazeUI() {
+  const btn = $('#btn-dehaze');
+  if (btn) btn.classList.toggle('on', S.dehaze.active);
+  const cmpBtn = $('#btn-cmp-dehaze-toggle');
+  if (cmpBtn) cmpBtn.classList.toggle('active', S.dehaze.active);
+
+  if (S.mode === 'loupe') {
+    loupeImg.classList.toggle('dehazed', S.dehaze.active);
+    const g = S.view[S.cur];
+    if (g) {
+      renderStageBadges(g);
+      const cached = fullCache.get(g.primary);
+      if (cached && cached.hist) updateDehazeFilter(cached.hist);
+    }
+  } else if (S.mode === 'compare') {
+    renderCompare();
+  }
+}
+
+/**
+ * 一键将当前照片以「原片 ⇄ 去灰」模式展开在细节对比工作台中
+ */
+function openDehazeCompare(targetG) {
+  const g = targetG || S.view[S.cur] || (S.compare.items[S.compare.curSlot]);
+  if (!g) {
+    toast('当前没有可对比的照片', { err: true });
+    return;
+  }
+  const itemA = makeCompareItem(g);
+  itemA.dehazeSlot = false;
+  itemA.slotLabel = '原片';
+
+  const itemB = makeCompareItem(g);
+  itemB.dehazeSlot = true;
+  itemB.slotLabel = '去灰增强';
+
+  S.compare.prevMode = S.mode === 'compare' ? 'grid' : S.mode;
+  S.compare.items = [itemA, itemB];
+  S.compare.curSlot = 1;
+  S.compare.mode = 'curtain'; // 默认以最直观的卷帘对比进入
+  S.compare.layout = '2-col';
+  S.compare.curtainSplit = 0.5;
+  S.mode = 'compare';
+
+  $('#empty').hidden = true;
+  $('#grid-view').hidden = true;
+  $('#loupe').hidden = true;
+  $('#actionbar').hidden = true;
+  $('#compare-view').hidden = false;
+  $('#btn-grid').classList.remove('on');
+  const btnCmp = $('#btn-compare');
+  if (btnCmp) btnCmp.classList.add('on');
+
+  renderCompare();
+  buildCompareFilmstrip();
+  toast('✨ 已开启「原片 ⇄ 去灰」对比 (拖动中线即可对比)');
+}
+
+/* ==========================================================================
    照片细节对比工作台 (Compare Studio)
    ========================================================================== */
 
@@ -688,6 +849,8 @@ function makeCompareItem(gOrPath) {
       srcH: 0,
       o: 1,
       locked: true,
+      dehazeSlot: typeof gOrPath === 'object' ? gOrPath.dehazeSlot : undefined,
+      slotLabel: typeof gOrPath === 'object' ? gOrPath.slotLabel : undefined,
     };
   }
   return {
@@ -709,6 +872,8 @@ function makeCompareItem(gOrPath) {
     srcH: 0,
     o: 1,
     locked: true,
+    dehazeSlot: gOrPath.dehazeSlot,
+    slotLabel: gOrPath.slotLabel,
   };
 }
 
@@ -802,6 +967,8 @@ function updateCompareDock() {
   }
   const syncBtn = $('#btn-cmp-sync');
   if (syncBtn) syncBtn.classList.toggle('active', S.compare.syncZoomPan);
+  const dehazeBtn = $('#btn-cmp-dehaze-toggle');
+  if (dehazeBtn) dehazeBtn.classList.toggle('active', S.dehaze.active);
 }
 
 /* 同上：只同步槽位的激活态与收藏态，不重建 DOM */
@@ -863,14 +1030,25 @@ function renderSplitCompare() {
     const nameSpan = el('div', 'slot-name');
     nameSpan.textContent = item.name;
     nameSpan.title = item.name;
-    const tagSpan = el('div', 'slot-tag');
-    tagSpan.textContent = item.ext;
+    const isSlotDehazed = Boolean(item.dehazeSlot !== undefined ? item.dehazeSlot : S.dehaze.active);
+    const tagSpan = el('div', 'slot-tag' + (item.dehazeSlot ? ' tag-dehazed' : ''));
+    tagSpan.textContent = item.slotLabel || (item.dehazeSlot ? '去灰' : item.ext);
     badgeGroup.append(numBadge, nameSpan, tagSpan);
 
     const exifPill = el('div', 'slot-exif-pill');
     exifPill.innerHTML = '<span>载入参数…</span>';
 
     const actions = el('div', 'slot-actions');
+
+    // 独立去灰按钮
+    const btnSlotDehaze = el('button', 'slot-btn dehaze' + (isSlotDehazed ? ' active' : ''));
+    btnSlotDehaze.title = isSlotDehazed ? '当前槽位已开启去灰 (点击切换)' : '为当前槽位开启去灰增强';
+    btnSlotDehaze.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>';
+    btnSlotDehaze.onclick = (e) => {
+      e.stopPropagation();
+      item.dehazeSlot = !isSlotDehazed;
+      renderSplitCompare();
+    };
 
     // 收藏按钮
     const btnFav = el('button', 'slot-btn fav' + (item.state === 'fav' ? ' active' : ''));
@@ -916,7 +1094,7 @@ function renderSplitCompare() {
       removeFromCompare(idx);
     };
 
-    actions.append(btnFav, btnLock, btnWin, btnDel);
+    actions.append(btnSlotDehaze, btnFav, btnLock, btnWin, btnDel);
     header.append(badgeGroup, exifPill, actions);
     slot.appendChild(header);
 
@@ -924,6 +1102,7 @@ function renderSplitCompare() {
     const viewport = el('div', 'slot-viewport');
     const img = el('img');
     img.draggable = false;
+    if (isSlotDehazed) img.classList.add('dehazed');
     viewport.appendChild(img);
 
     const zoomTag = el('div', 'slot-zoom-tag');
@@ -1286,13 +1465,25 @@ function renderCurtainCompare() {
   const itemA = S.compare.items[0];
   const itemB = S.compare.items[1];
 
-  $('#curtain-badge-a').textContent = `A · ${itemA.name}`;
-  $('#curtain-badge-b').textContent = `B · ${itemB.name}`;
-
   const imgA = $('#curtain-img-a');
   const imgB = $('#curtain-img-b');
   const box = $('#curtain-box');
   const divider = $('#curtain-divider');
+
+  const isDehazePair = itemA.primary === itemB.primary && (itemA.dehazeSlot !== undefined || itemB.dehazeSlot !== undefined);
+  if (isDehazePair) {
+    $('#curtain-badge-a').textContent = `原片 · ${itemA.name}`;
+    $('#curtain-badge-b').textContent = `去灰增强 · ${itemB.name}`;
+    $('#curtain-badge-b').classList.add('dehazed');
+    imgA.classList.remove('dehazed');
+    imgB.classList.add('dehazed');
+  } else {
+    $('#curtain-badge-a').textContent = `A · ${itemA.name}`;
+    $('#curtain-badge-b').textContent = `B · ${itemB.name}`;
+    $('#curtain-badge-b').classList.remove('dehazed');
+    imgA.classList.toggle('dehazed', Boolean(itemA.dehazeSlot !== undefined ? itemA.dehazeSlot : S.dehaze.active));
+    imgB.classList.toggle('dehazed', Boolean(itemB.dehazeSlot !== undefined ? itemB.dehazeSlot : S.dehaze.active));
+  }
 
   box.style.setProperty('--split-x', `${Math.round(S.compare.curtainSplit * 100)}%`);
 
@@ -1470,12 +1661,26 @@ function renderBlinkCompare() {
   const itemB = S.compare.items[1];
   const curItem = S.compare.blinkIndex === 0 ? itemA : itemB;
 
+  const isDehazePair = itemA.primary === itemB.primary && (itemA.dehazeSlot !== undefined || itemB.dehazeSlot !== undefined);
+  if (isDehazePair) {
+    $('#blink-tag-a').textContent = `原片 · ${itemA.name}`;
+    $('#blink-tag-b').textContent = `去灰增强 · ${itemB.name}`;
+    $('#blink-tag-b').classList.add('dehazed');
+  } else {
+    $('#blink-tag-a').textContent = `A · ${itemA.name}`;
+    $('#blink-tag-b').textContent = `B · ${itemB.name}`;
+    $('#blink-tag-b').classList.remove('dehazed');
+  }
+
   $('#blink-tag-a').classList.toggle('active', S.compare.blinkIndex === 0);
   $('#blink-tag-b').classList.toggle('active', S.compare.blinkIndex === 1);
-  $('#blink-tag-a').textContent = `A · ${itemA.name}`;
-  $('#blink-tag-b').textContent = `B · ${itemB.name}`;
 
   const img = $('#blink-img');
+  if (isDehazePair) {
+    img.classList.toggle('dehazed', S.compare.blinkIndex === 1);
+  } else {
+    img.classList.toggle('dehazed', Boolean(curItem.dehazeSlot !== undefined ? curItem.dehazeSlot : S.dehaze.active));
+  }
 
   // 另一张先预热进 fullCache，否则第一次按 Tab 要等一趟 IPC，谈不上「毫秒级交替」
   const other = S.compare.blinkIndex === 0 ? itemB : itemA;
@@ -1864,21 +2069,31 @@ function applyFull(g, rec, token) {
   g.meta = { orientation: rec.o, width: rec.w, height: rec.h, exif: rec.exif, fileSize: rec.fileSize };
   setLoupeImage(rec.url, rec.o, false, rec.w, rec.h);
   renderInfo(g, { ok: true, exif: rec.exif, width: rec.w, height: rec.h });
-  if (S.settings.showHistogram) drawHistogramFor(rec, token);
+  if (rec.hist) updateDehazeFilter(rec.hist);
+  if (S.settings.showHistogram || S.dehaze.active) drawHistogramFor(rec, token);
   else $('#histogram').getContext('2d').clearRect(0, 0, 4000, 4000);
 }
 
 async function drawHistogramFor(rec, token) {
-  if (rec.hist) return drawHistogram(rec.hist);
-  $('#histogram').getContext('2d').clearRect(0, 0, 4000, 4000);
+  if (rec.hist) {
+    if (!token || token === S.loupe.token) updateDehazeFilter(rec.hist);
+    if (S.settings.showHistogram) drawHistogram(rec.hist);
+    return;
+  }
+  if (S.settings.showHistogram) $('#histogram').getContext('2d').clearRect(0, 0, 4000, 4000);
   const ab = await rec.blob.arrayBuffer();
   const h = await workerCall({ type: 'hist', buf: ab });
   if (!h.ok) return;
   rec.hist = h.hist;
-  if (token === S.loupe.token) drawHistogram(h.hist);
+  // 必须只在当前大图仍是这张（token 一致）时才更新活动滤镜，避免快速连续切图时的竞态污染
+  if (!token || token === S.loupe.token) {
+    updateDehazeFilter(h.hist);
+    if (S.settings.showHistogram) drawHistogram(h.hist);
+  }
 }
 
 function setLoupeImage(url, o, isPlaceholder, srcW, srcH) {
+  loupeImg.classList.toggle('dehazed', S.dehaze.active);
   S.loupe.o = isPlaceholder ? 1 : o || 1;
   // 主进程从 JPEG SOF 解出来的真实存储尺寸。不能用 img.naturalWidth：
   // 开了 image-orientation:none 之后渲染不转向，但 naturalWidth 报的仍是转向后的值。
@@ -2007,6 +2222,11 @@ function renderStageBadges(g) {
   };
   if (g.state === 'fav') add('★ 已收藏', 'f');
   if (g.state === 'del') add('✕ 已删除（在回收站）', 'd');
+  if (S.dehaze && S.dehaze.active) {
+    const b = el('div', 'sbadge dehaze');
+    b.innerHTML = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3Z"/></svg><span>去灰开启</span>';
+    box.appendChild(b);
+  }
   add(g.ext + (g.hasPair ? ' + JPG' : ''));
 }
 
@@ -2493,6 +2713,9 @@ document.addEventListener('keydown', (e) => {
       case 'w':
         e.preventDefault();
         return pickCompareWinner(S.compare.curSlot);
+      case 'h':
+        e.preventDefault();
+        return toggleCompareDehaze();
       case 'f':
         e.preventDefault();
         return toggleSlotFav(S.compare.curSlot);
@@ -2555,6 +2778,7 @@ document.addEventListener('keydown', (e) => {
   switch (k.toLowerCase()) {
     case 'c': e.preventDefault(); return openCompare();
     case 'f': e.preventDefault(); return actFavorite();
+    case 'h': e.preventDefault(); return toggleDehaze();
     case 'x': e.preventDefault(); return actDelete();
     case 'd': e.preventDefault(); return actDelete();
     case 'r': e.preventDefault(); return refreshFolder();
@@ -2670,6 +2894,8 @@ $('#btn-open').onclick = async () => openFolder(await window.pv.openFolderDialog
 $('#btn-refresh').onclick = refreshFolder;
 $('#btn-grid').onclick = () => (S.mode === 'grid' ? showLoupe() : showGrid());
 $('#btn-compare').onclick = toggleCompare;
+const btnDehaze = $('#btn-dehaze');
+if (btnDehaze) btnDehaze.onclick = toggleDehaze;
 $('#btn-theme').onclick = toggleTheme;
 $('#btn-help').onclick = () => ($('#help-modal').hidden = false);
 $('#btn-close-help').onclick = () => ($('#help-modal').hidden = true);
@@ -2704,6 +2930,10 @@ $('#btn-cmp-sync').onclick = () => {
 };
 $('#btn-cmp-100').onclick = sync100;
 $('#btn-cmp-fit').onclick = resetCompareFit;
+const btnCmpDehazePair = $('#btn-cmp-dehaze-pair');
+if (btnCmpDehazePair) btnCmpDehazePair.onclick = () => openDehazeCompare();
+const btnCmpDehazeToggle = $('#btn-cmp-dehaze-toggle');
+if (btnCmpDehazeToggle) btnCmpDehazeToggle.onclick = toggleCompareDehaze;
 $('#btn-cmp-add').onclick = addSlotFromAlbum;
 $('#btn-cmp-close').onclick = closeCompare;
 initBlinkInteractions();
@@ -2790,6 +3020,10 @@ window.__pv = {
   toggle100,
   toggleTheme,
   applyTheme,
+  toggleDehaze,
+  computeDehazeCurve,
+  openDehazeCompare,
+  toggleCompareDehaze,
   _int: { getThumb, urlCache, inflight, queue, pool, fullCache, loadFull, get running() { return running; } },
 };
 

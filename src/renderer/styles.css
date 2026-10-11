@@ -2776,3 +2776,61 @@ kbd {
   box-shadow: 0 2px 4px rgba(0,0,0,0.5);
 }
 
+/* ============ 智能去灰与动态通透滤镜系统 ============ */
+.dehazed {
+  filter: url(#pv-dehaze-filter);
+  /* 确保 GPU 硬件合成抗锯齿平滑 */
+  will-change: filter;
+}
+
+.sbadge.dehaze {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent-border);
+  box-shadow: 0 2px 10px var(--accent-glow);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sbadge.dehaze svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* 对比工作台槽位去灰增强微按钮 */
+.slot-btn.dehaze {
+  color: var(--fg-secondary);
+}
+
+.slot-btn.dehaze:hover {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.slot-btn.dehaze.active {
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.slot-tag.tag-dehazed {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent-border);
+  font-weight: 700;
+}
+
+.curtain-badge.dehazed {
+  background: var(--accent-bg) !important;
+  color: var(--accent) !important;
+  border-color: var(--accent-border) !important;
+  box-shadow: 0 2px 12px var(--accent-glow) !important;
+}
+
+.blink-tag.dehazed {
+  border-color: var(--accent-border) !important;
+  color: var(--accent) !important;
+}
+
