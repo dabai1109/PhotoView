@@ -666,71 +666,86 @@ function showLoupe() {
    ========================================================================== */
 
 /**
- * 智能通透/去灰曲线生成器 (基于直方图自适应拉伸与保高光非对称 S 曲线)
+ * 智能去灰曲线生成器 —— 基于大气散射模型的逆运算
+ *
+ * 发灰照片可建模为 I = J·t + A·(1 − t)：J 是真实场景，A 是大气光（雾的亮度），t 是透射率。
+ * 雾霭把整幅画面的黑场抬到 A·(1 − t)、把动态范围压缩成 t 倍。从亮度直方图上鲁棒地估计出
+ * 雾底 lo ≈ A·(1 − t) 和大气光 A，就能反解 t = 1 − lo / A，再按 J = (I − lo) / t 还原。
+ *
+ * 曲线性质：
+ *  - 大气光 A 映射到自身：最亮的雾/天空不会被继续提亮，高光绝不会被拉爆；
+ *  - 雾底落在一个很小的趾部值 (TOE)，趾部以下用二次曲线软着陆，暗部不会被硬切成死黑；
+ *  - A 以上的极少数高光（镜面反射、点光源）走软肩部压缩，而不是截断到 1；
+ *  - 最后叠加一层很轻的反对称 S 曲线提升中间调通透感，不影响端点与单调性；
+ *  - 无雾的正常照片 lo ≈ 0、t ≈ 1，曲线退化为近似恒等 + 轻微 S，不会毁掉好片。
+ *
  * @param {Object} hist 直方图数据 { r, g, b, l }
- * @returns {string} 适用于 SVG feFuncR/G/B 的 tableValues 空格分隔浮点数字符串
+ * @returns {string} 适用于 SVG feFuncR/G/B 的 tableValues 空格分隔浮点数字符串 (33 个采样点)
  */
 function computeDehazeCurve(hist) {
   const SAMPLES = 33; // 33 个等分采样点 (步长 1/32)
-  const luma = hist && Array.isArray(hist.l) ? hist.l : null;
+  const luma = hist && Array.isArray(hist.l) && hist.l.length === 256 ? hist.l : null;
 
-  let blackPt = 0;
-  let whitePt = 255;
-
-  if (luma && luma.length === 256) {
+  // 1. 鲁棒估计雾底 lo（前 0.5% 分位）与大气光 A（后 1% 分位，抗镜面高光杂点）
+  let lo = 0;
+  let A = 255;
+  if (luma) {
     let total = 0;
     for (let i = 0; i < 256; i++) total += luma[i];
-
     if (total > 0) {
-      // 动态黑白场分位阈值：前 0.6% 为黑场锚点，后 0.4% 为高光锚点
-      const blackCut = total * 0.006;
-      const whiteCut = total * 0.004;
-
+      const loCut = total * 0.005;
+      const hiCut = total * 0.01;
       let cum = 0;
       for (let i = 0; i < 256; i++) {
         cum += luma[i];
-        if (cum >= blackCut) {
-          blackPt = i;
+        if (cum >= loCut) {
+          lo = i;
           break;
         }
       }
-
       cum = 0;
       for (let i = 255; i >= 0; i--) {
         cum += luma[i];
-        if (cum >= whiteCut) {
-          whitePt = i;
+        if (cum >= hiCut) {
+          A = i;
           break;
         }
       }
     }
   }
 
-  // 安全钳位：防止极端照片过冲失真
-  const safeBlack = Math.min(blackPt, 55);
-  const safeWhite = Math.max(whitePt, 200);
-  const range = Math.max(60, safeWhite - safeBlack);
+  // 2. 反解透射率。雾底最多按 90 计（高调片/浓雾只做部分去灰，避免整张压暗），t 下限 0.5（最多 2 倍扩展）
+  const loEff = Math.min(lo, 90);
+  const black = loEff / 255;
+  const t = Math.max(0.5, Math.min(1, 1 - loEff / Math.max(A, 1)));
+  const scale = 1 / t;
+  // 雾底落点 (≈ 9/255)。随雾底线性启用：没有雾 (lo ≈ 0) 时趾部为 0，不会把本来就纯黑的暗部抬成奶灰
+  const TOE = 0.035 * Math.min(1, loEff / 30);
+  const S_AMOUNT = 0.15; // 中间调 S 曲线强度（≤ 0.66 时保证严格单调）
+  const yKnee = Math.min(1, A / 255); // 大气光自映射点，软肩部从这里开始
+  const yMax = (1 - black) * scale; // 输入 255 在肩部压缩前的落点（恒 ≥ 1）
 
   const values = [];
   for (let k = 0; k < SAMPLES; k++) {
-    const normIn = k / (SAMPLES - 1); // 0.0 ~ 1.0
-    const rawVal = normIn * 255;
-
-    // 1. 黑白场动态线性拉伸
-    let stretched = (rawVal - safeBlack) / range;
-    stretched = Math.max(0, Math.min(1, stretched));
-
-    // 2. 非对称保高光 S 曲线 (暗部下潜压实消除灰蒙，中间调拉开反差，高光软滚降防过曝)
-    let sVal;
-    if (stretched < 0.5) {
-      sVal = 0.5 * Math.pow(2 * stretched, 1.22);
+    const x = k / (SAMPLES - 1); // 0.0 ~ 1.0
+    const ym = (x - black) * scale;
+    let y;
+    if (ym <= 0) {
+      // 雾底以下：二次软趾部，0 → TOE
+      y = black > 0 ? TOE * Math.pow(x / black, 2) : 0;
     } else {
-      sVal = 1 - 0.5 * Math.pow(2 * (1 - stretched), 1.12);
+      let v = ym;
+      if (v > yKnee && yMax > yKnee + 1e-3) {
+        // 大气光以上的高光：软肩部把 [yKnee, yMax] 压进 [yKnee, 1]
+        const z = Math.min(1, (v - yKnee) / (yMax - yKnee));
+        v = yKnee + (1 - yKnee) * (1 - Math.pow(1 - z, 1.8));
+      }
+      v = Math.min(1, v);
+      y = TOE + (1 - TOE) * v;
     }
-
-    // 3. 适度混入，保留自然渐变
-    const finalVal = stretched * 0.15 + sVal * 0.85;
-    values.push(Math.max(0, Math.min(1, finalVal)).toFixed(4));
+    // 3. 轻微反对称 S：g(y) = y + s·y(1−y)(2y−1)，g(0) = 0、g(1) = 1
+    const out = y + S_AMOUNT * y * (1 - y) * (2 * y - 1);
+    values.push(Math.max(0, Math.min(1, out)).toFixed(4));
   }
 
   return values.join(' ');
@@ -745,6 +760,16 @@ function updateDehazeFilter(hist) {
   if (fr && fr.setAttribute) fr.setAttribute('tableValues', tableValues);
   if (fg && fg.setAttribute) fg.setAttribute('tableValues', tableValues);
   if (fb && fb.setAttribute) fb.setAttribute('tableValues', tableValues);
+}
+
+/**
+ * 确保 SVG 去灰滤镜用的是这张照片自己的曲线。
+ * 直方图可能还没算过（直方图面板关着、加载时去灰也没开），这时必须现算，
+ * 否则滤镜会沿用上一张照片的曲线，效果完全不对。token 非空时只在仍是当前大图时才写入。
+ */
+function ensureDehazeCurve(rec, token) {
+  if (!rec || rec.error || !rec.blob) return;
+  drawHistogramFor(rec, token);
 }
 
 function toggleDehaze() {
@@ -774,8 +799,8 @@ function syncDehazeUI() {
     const g = S.view[S.cur];
     if (g) {
       renderStageBadges(g);
-      const cached = fullCache.get(g.primary);
-      if (cached && cached.hist) updateDehazeFilter(cached.hist);
+      // 直方图可能还没算过（面板关着、加载时去灰也没开），不能沿用上一张照片的曲线
+      if (S.dehaze.active) ensureDehazeCurve(fullCache.get(g.primary), S.loupe.token);
     }
   } else if (S.mode === 'compare') {
     renderCompare();
@@ -1136,6 +1161,9 @@ function renderSplitCompare() {
       item.srcW = rec.w || 0;
       item.srcH = rec.h || 0;
 
+      // 去灰槽位：曲线必须是这张照片自己的
+      if (isSlotDehazed) ensureDehazeCurve(rec, null);
+
       // 渲染 EXIF 胶囊
       renderSlotExif(exifPill, rec.exif);
 
@@ -1492,6 +1520,7 @@ function renderCurtainCompare() {
       itemA.o = recA.o || 1;
       itemA.srcW = recA.w || 0;
       itemA.srcH = recA.h || 0;
+      if (imgA.classList.contains('dehazed')) ensureDehazeCurve(recA, null);
       imgA.src = recA.url;
       imgA.onload = () => layoutCurtainImages();
     }
@@ -1502,6 +1531,7 @@ function renderCurtainCompare() {
       itemB.o = recB.o || 1;
       itemB.srcW = recB.w || 0;
       itemB.srcH = recB.h || 0;
+      if (imgB.classList.contains('dehazed')) ensureDehazeCurve(recB, null);
       imgB.src = recB.url;
       imgB.onload = () => layoutCurtainImages();
     }
@@ -1691,6 +1721,7 @@ function renderBlinkCompare() {
       curItem.o = rec.o || 1;
       curItem.srcW = rec.w || 0;
       curItem.srcH = rec.h || 0;
+      if (img.classList.contains('dehazed')) ensureDehazeCurve(rec, null);
       img.onload = () => layoutBlinkImage();
       img.src = rec.url;
       if (img.complete && img.naturalWidth) layoutBlinkImage();

@@ -116,29 +116,63 @@ const makeMockPv = (root, scanResult) => ({
   preview: async () => ({ ok: true, data: new Uint8Array(10), orientation: 1, width: 4000, height: 3000, exif: {} }),
 });
 
-test('computeDehazeCurve: 能针对不同直方图计算出单调递增且保护高光的 33 阶 S 曲线', () => {
+test('computeDehazeCurve: 基于大气散射模型的去灰曲线 —— 去纱幕、保高光、不毁好片', () => {
   const pv = makeMockPv('D:/Photos');
   const app = loadApp(pv);
 
-  // 1. 无直方图 (兜底曲线)
-  const defaultCurve = app.computeDehazeCurve(null);
-  const defParts = defaultCurve.split(' ').map(Number);
-  assert.strictEqual(defParts.length, 33, '采样点必须为 33 个');
-  assert.strictEqual(defParts[0], 0, '起点必须为 0');
-  assert.strictEqual(defParts[32], 1, '终点必须为 1');
-  // 必须严格单调递增
-  for (let i = 1; i < defParts.length; i++) {
-    assert.ok(defParts[i] >= defParts[i - 1], `第 ${i} 点必须递增`);
+  const parse = (s) => s.split(' ').map(Number);
+  const assertCurveShape = (parts, label) => {
+    assert.strictEqual(parts.length, 33, `${label}: 采样点必须为 33 个`);
+    assert.strictEqual(parts[0], 0, `${label}: 起点必须为 0`);
+    assert.strictEqual(parts[32], 1, `${label}: 终点必须为 1`);
+    for (let i = 1; i < parts.length; i++) {
+      assert.ok(parts[i] >= parts[i - 1], `${label}: 第 ${i} 点必须递增`);
+    }
+  };
+  // 第 k 个采样点对应输入 k/32；输入 v (0..255) 按 SVG table 的线性插值取曲线值
+  const at = (parts, v) => {
+    const pos = (v / 255) * 32;
+    const i0 = Math.floor(pos);
+    const i1 = Math.min(32, i0 + 1);
+    const t = pos - i0;
+    return parts[i0] * (1 - t) + parts[i1] * t;
+  };
+  const uniform = (from, to) => {
+    const l = new Array(256).fill(0);
+    for (let i = from; i <= to; i++) l[i] = 100;
+    return l;
+  };
+
+  // 1. 无直方图 (兜底曲线)：近似恒等 + 轻微 S
+  const defaultCurve = parse(app.computeDehazeCurve(null));
+  assertCurveShape(defaultCurve, '兜底曲线');
+  assert.ok(Math.abs(at(defaultCurve, 128) - 128 / 255) < 0.03, '兜底曲线的中灰基本不动');
+
+  // 2. 发灰照片（亮度集中在 40 ~ 210）
+  const hazy = parse(app.computeDehazeCurve({ l: uniform(40, 210) }));
+  assertCurveShape(hazy, '发灰曲线');
+  const floor = at(hazy, 40);
+  assert.ok(floor > 0 && floor < 0.06, `雾底应落在软趾部而不是硬切成 0: ${floor}`);
+  assert.ok(at(hazy, 128) < 128 / 255, `中间调应整体下沉去纱幕，而不是被提亮: ${at(hazy, 128)}`);
+  assert.ok(Math.abs(at(hazy, 210) - 210 / 255) < 0.05, `大气光应映射到自身附近，最亮的雾不能再被提亮: ${at(hazy, 210)}`);
+  assert.ok(hazy[31] < 1, `224 以上的高光不得被截断成纯白: ${hazy[31]}`);
+
+  // 3. 正常曝光的满动态范围照片：曲线接近恒等，不会毁掉好片
+  const normal = parse(app.computeDehazeCurve({ l: new Array(256).fill(100) }));
+  assertCurveShape(normal, '正常曲线');
+  for (let k = 0; k < 33; k++) {
+    assert.ok(Math.abs(normal[k] - k / 32) < 0.03, `正常照片第 ${k} 点偏离恒等过大: ${normal[k]}`);
   }
 
-  // 2. 严重发灰照片的直方图（最低亮度在 40，最高在 210）
-  const hazyLuma = new Array(256).fill(0);
-  for (let i = 40; i <= 210; i++) hazyLuma[i] = 100;
-  const hazyCurve = app.computeDehazeCurve({ l: hazyLuma });
-  const hazyParts = hazyCurve.split(' ').map(Number);
-  assert.strictEqual(hazyParts.length, 33);
-  // 发灰照片输入原值为 40/255 ≈ 0.156 对应的点应该被压实到更低（下潜去灰）
-  assert.ok(hazyParts[0] === 0, '黑电平压实');
+  // 4. 高调 / 浓雾照片（亮度整体落在 150 ~ 255）：雾底钳位只做部分去灰，不能整张压成死黑
+  const highKey = parse(app.computeDehazeCurve({ l: uniform(150, 255) }));
+  assertCurveShape(highKey, '高调曲线');
+  assert.ok(at(highKey, 150) > 0.15, `高调照片的最暗处不应被压成死黑: ${at(highKey, 150)}`);
+
+  // 5. 雾越重去纱幕越狠：浓雾 (底 90) 的中灰要比轻雾 (底 40) 压得更低
+  const heavy = parse(app.computeDehazeCurve({ l: uniform(90, 230) }));
+  assertCurveShape(heavy, '浓雾曲线');
+  assert.ok(at(heavy, 128) < at(hazy, 128), '浓雾照片的中间调应比轻雾压得更低');
 });
 
 test('toggleDehaze: 一键开关能够正确反转状态', async () => {
