@@ -21,7 +21,7 @@ const S = {
   settings: {},
   session: { favorites: [], cursor: 0 },
   undo: [],
-  dehaze: { active: false, curHist: null },
+  dehaze: { active: false, strength: 100, preset: 'standard', curHist: null, curProfile: null },
   loupe: { url: null, zoom: 1, fit: 1, panX: 0, panY: 0, o: 1, srcW: 0, srcH: 0, natW: 0, natH: 0, token: 0 },
   compare: {
     items: [],
@@ -597,6 +597,10 @@ function syncCard(card, g, i) {
   card.classList.toggle('sel', i === S.cur);
   card.classList.toggle('fav', g.state === 'fav');
   card.classList.toggle('del', g.state === 'del');
+  const img = card.querySelector('img');
+  if (img && img.classList) {
+    img.classList.toggle('dehazed-thumb', Boolean(S.dehaze && S.dehaze.active && g.state !== 'del'));
+  }
   const old = card.querySelector('.badge');
   if (old) old.remove();
   if (g.state !== 'none') {
@@ -662,121 +666,417 @@ function showLoupe() {
 }
 
 /* ==========================================================================
-   智能去灰与动态通透引擎 (Dehaze & Adaptive Clarity Engine)
+   智能去灰与动态通透引擎 2.0 (Luma-Chroma Decoupled Dehaze & Clarity Engine)
    ========================================================================== */
 
+const DEHAZE_PRESETS = [
+  { key: 'soft', label: '轻柔', strength: 65 },
+  { key: 'standard', label: '标准', strength: 100 },
+  { key: 'strong', label: '强力', strength: 135 },
+];
+
+function quantileFromHist(arr, q) {
+  let total = 0;
+  for (let i = 0; i < 256; i++) total += arr[i];
+  if (total <= 0) return q < 0.5 ? 0 : 255;
+  if (q <= 0.5) {
+    const cut = total * q;
+    let cum = 0;
+    for (let i = 0; i < 256; i++) {
+      cum += arr[i];
+      if (cum >= cut) return i;
+    }
+    return 255;
+  }
+  const revCut = total * (1 - q);
+  let cum = 0;
+  for (let i = 255; i >= 0; i--) {
+    cum += arr[i];
+    if (cum >= revCut) return i;
+  }
+  return 0;
+}
+
 /**
- * 智能去灰曲线生成器 —— 基于大气散射模型的逆运算
- *
- * 发灰照片可建模为 I = J·t + A·(1 − t)：J 是真实场景，A 是大气光（雾的亮度），t 是透射率。
- * 雾霭把整幅画面的黑场抬到 A·(1 − t)、把动态范围压缩成 t 倍。从亮度直方图上鲁棒地估计出
- * 雾底 lo ≈ A·(1 − t) 和大气光 A，就能反解 t = 1 − lo / A，再按 J = (I − lo) / t 还原。
- *
- * 曲线性质：
- *  - 大气光 A 映射到自身：最亮的雾/天空不会被继续提亮，高光绝不会被拉爆；
- *  - 雾底落在一个很小的趾部值 (TOE)，趾部以下用二次曲线软着陆，暗部不会被硬切成死黑；
- *  - A 以上的极少数高光（镜面反射、点光源）走软肩部压缩，而不是截断到 1；
- *  - 最后叠加一层很轻的反对称 S 曲线提升中间调通透感，不影响端点与单调性；
- *  - 无雾的正常照片 lo ≈ 0、t ≈ 1，曲线退化为近似恒等 + 轻微 S，不会毁掉好片。
- *
- * @param {Object} hist 直方图数据 { r, g, b, l }
- * @returns {string} 适用于 SVG feFuncR/G/B 的 tableValues 空格分隔浮点数字符串 (33 个采样点)
+ * 构造无损偏置色度矩阵：0.5 + 0.5 * c * (RGB - Y)
+ * 在 SVG feColorMatrix 中将原片色差 (RGB - Y) 线性缩放到 [0, 1] 安全区间，
+ * 随后与去灰后的纯亮度 Y' 通过 feComposite(k2=1, k3=2, k4=-1) 重组为 Y' + c * (RGB - Y)。
+ * 严格保持 R-G : G-B 的原始色相比例 (Hue Invariant)，彻底杜绝传统单通道曲线造成的饱和度暴涨与肤色偏橘。
  */
-function computeDehazeCurve(hist) {
-  const SAMPLES = 33; // 33 个等分采样点 (步长 1/32)
+function buildChromaMatrix(chromaGain = 0.92) {
+  const k = 0.5 * Math.max(0, Math.min(1.25, chromaGain));
+  const rR = (0.7874 * k).toFixed(4);
+  const rG = (-0.7152 * k).toFixed(4);
+  const rB = (-0.0722 * k).toFixed(4);
+  const gR = (-0.2126 * k).toFixed(4);
+  const gG = (0.2848 * k).toFixed(4);
+  const gB = (-0.0722 * k).toFixed(4);
+  const bR = (-0.2126 * k).toFixed(4);
+  const bG = (-0.7152 * k).toFixed(4);
+  const bB = (0.9278 * k).toFixed(4);
+  return `${rR} ${rG} ${rB} 0 0.5 ${gR} ${gG} ${gB} 0 0.5 ${bR} ${bG} ${bB} 0 0.5 0 0 0 1 0`;
+}
+
+/**
+ * 智能去灰完整配置生成器 —— 解决「去灰后饱和度过高」与「局部暗部变死黑」两大核心痛点
+ *
+ * 核心设计原理：
+ * 1. 暗通道与亮度联合约束 (Dark Channel Guard)：
+ *    不仅统计亮度 L 的底值 lo，还结合暗通道 min(R,G,B) 底值 dcLo。若画面中存在暖调或高饱和暗部，
+ *    次通道本来就很低，此时自动限制黑场扣除幅度，避免把有色暗部的次通道压成 0 造成发乌死黑。
+ * 2. C1 连续三次 Hermite 软趾部 (Smooth C1 Shadow Toe)：
+ *    告别硬折线截断！在 [0, xKnee] 暗部过渡区采用一阶导数连续的 Hermite 样条，
+ *    保持起点斜率 m0 >= 0.38，将雾底平滑下沉至有呼吸感的深灰黑位，暗部细节层次分明、绝不死黑。
+ * 3. 带暗部保护门的中间调通透曲线 (Shadow-Gated Midtone Clarity)：
+ *    废除会二次压黑暗部的全局对称 S 曲线，通过 shadowGuard 门限函数使对比度拉伸仅作用于中高调 (y > 0.22)。
+ * 4. 亮度与色度解耦 + 自适应色度阻尼 (Luma-Chroma Decoupling & Anti-Oversaturation)：
+ *    当亮度下沉至 midRatio 倍时，相对饱和度会自然上升 1/midRatio 倍；通过将色度增益 chromaGain
+ *    自动匹配至 midRatio 并根据原片 meanSat 动态阻尼，保证去灰后色彩干净自然、绝不过饱和。
+ *
+ * @param {Object} hist 直方图数据 { r, g, b, l, dc, meanSat, highSatRatio }
+ * @param {number} [strengthArg] 去灰强度百分比 (25 ~ 150，默认取 S.dehaze.strength || 100)
+ */
+function computeDehazeProfile(hist, strengthArg) {
+  const SAMPLES = 33;
+  const pct = strengthArg !== undefined ? Number(strengthArg) : (S.dehaze && S.dehaze.strength) || 100;
+  const strength = Math.max(0.15, Math.min(1.8, (pct || 100) / 100));
   const luma = hist && Array.isArray(hist.l) && hist.l.length === 256 ? hist.l : null;
+  const dcHist = hist && Array.isArray(hist.dc) && hist.dc.length === 256 ? hist.dc : null;
 
-  // 1. 鲁棒估计雾底 lo（前 0.5% 分位）与大气光 A（后 1% 分位，抗镜面高光杂点）
+  // 1. 兜底配置（无直方图时：温和通透微调）
+  if (!luma) {
+    const lumaVals = [];
+    const softVals = [];
+    for (let k = 0; k < SAMPLES; k++) {
+      const x = k / (SAMPLES - 1);
+      const shadowGuard = Math.min(1, Math.pow(x / 0.22, 2));
+      const delta = 0.05 * strength * shadowGuard * x * (1 - x) * (2 * x - 0.85);
+      const y = Math.max(0, Math.min(1, x + delta));
+      lumaVals.push(y.toFixed(4));
+      softVals.push((0.5 * x + 0.5 * y).toFixed(4));
+    }
+    const chromaGain = 0.96;
+    return {
+      lumaTable: lumaVals.join(' '),
+      rgbSoftTable: softVals.join(' '),
+      chromaMatrix: buildChromaMatrix(chromaGain),
+      clarityK2: +(1 + 0.06 * strength).toFixed(3),
+      clarityK3: +(-0.06 * strength).toFixed(3),
+      mixLuma: 0.85,
+      mixRgb: 0.15,
+      chromaGain,
+      hazeFactor: 0.2,
+      lo: 0,
+      A: 255,
+    };
+  }
+
+  // 2. 提取亮度与暗通道分位点
+  let total = 0;
+  for (let i = 0; i < 256; i++) total += luma[i];
   let lo = 0;
+  let p50 = 128;
   let A = 255;
-  if (luma) {
-    let total = 0;
-    for (let i = 0; i < 256; i++) total += luma[i];
-    if (total > 0) {
-      const loCut = total * 0.005;
-      const hiCut = total * 0.01;
-      let cum = 0;
-      for (let i = 0; i < 256; i++) {
-        cum += luma[i];
-        if (cum >= loCut) {
-          lo = i;
-          break;
-        }
-      }
-      cum = 0;
-      for (let i = 255; i >= 0; i--) {
-        cum += luma[i];
-        if (cum >= hiCut) {
-          A = i;
-          break;
-        }
-      }
-    }
+  if (total > 0) {
+    lo = quantileFromHist(luma, 0.006);
+    p50 = quantileFromHist(luma, 0.50);
+    A = quantileFromHist(luma, 0.99);
   }
 
-  // 2. 反解透射率。雾底最多按 90 计（高调片/浓雾只做部分去灰，避免整张压暗），t 下限 0.5（最多 2 倍扩展）
-  const loEff = Math.min(lo, 90);
-  const black = loEff / 255;
-  const t = Math.max(0.5, Math.min(1, 1 - loEff / Math.max(A, 1)));
+  let dcLo = null;
+  if (dcHist) {
+    dcLo = quantileFromHist(dcHist, 0.01);
+  } else if (hist && Array.isArray(hist.r) && Array.isArray(hist.g) && Array.isArray(hist.b)) {
+    dcLo = Math.min(
+      quantileFromHist(hist.r, 0.008),
+      quantileFromHist(hist.g, 0.008),
+      quantileFromHist(hist.b, 0.008)
+    );
+  }
+
+  // 暗通道安全约束：防止单色/暖色阴影因为亮度较高但次通道接近 0 而被扣成死黑
+  const rawLo = dcLo !== null ? Math.min(lo, dcLo * 1.2 + 8) : lo;
+  const loEff = Math.min(rawLo, 90);
+
+  // 低调/暗部丰富场景阻尼：若画面整体偏暗 (p50 < 95)，自动减轻黑场下压，保护暗部细节
+  const darkSceneDamp = p50 < 95 ? Math.max(0.48, p50 / 95) : 1.0;
+
+  // 软黑场位移：仅扣除浮起雾底的 52%，留足暗部呼吸余量（告别以前 100% 扣除导致的死黑块）
+  const effLo = loEff * 0.52 * darkSceneDamp * Math.min(1.4, strength);
+  const black = Math.min(0.24, effLo / 255);
+  const aNorm = Math.max(0.55, Math.min(1, A / 255));
+
+  // 透射率 t 下限设为 0.64（最大对比斜率 1.56，温和通透不炸裂）
+  const t = Math.max(0.64, Math.min(1, 1 - (effLo / Math.max(A, 120)) * 0.85));
   const scale = 1 / t;
-  // 雾底落点 (≈ 9/255)。随雾底线性启用：没有雾 (lo ≈ 0) 时趾部为 0，不会把本来就纯黑的暗部抬成奶灰
-  const TOE = 0.035 * Math.min(1, loEff / 30);
-  const S_AMOUNT = 0.15; // 中间调 S 曲线强度（≤ 0.66 时保证严格单调）
-  const yKnee = Math.min(1, A / 255); // 大气光自映射点，软肩部从这里开始
-  const yMax = (1 - black) * scale; // 输入 255 在肩部压缩前的落点（恒 ≥ 1）
 
-  const values = [];
-  for (let k = 0; k < SAMPLES; k++) {
-    const x = k / (SAMPLES - 1); // 0.0 ~ 1.0
-    const ym = (x - black) * scale;
+  const xFloor = loEff / 255;
+  const xKnee = Math.min(0.45, Math.max(xFloor * 1.15, black * 1.6));
+  // 在软膝盖终点保留至少 48% 的原值基底，高调片 (lo>=150) 也能保持 > 0.35 的柔和明度
+  const yAtKneeRaw = Math.max(xKnee * 0.48, (xKnee - black) * scale);
+  const yKneeHigh = aNorm;
+  const yMax = yAtKneeRaw + (1 - xKnee) * scale;
+
+  // 雾感系数：无雾好片 (loEff <= 6) 时趋近于 0，曲线自动退化为恒等线，不伤好片
+  const hazeFactor = Math.min(1, Math.max(0, (loEff - 4) / 42));
+  const midContrast = (0.015 + 0.065 * hazeFactor) * Math.min(1.35, strength);
+
+  const evalCurvePoint = (x, factor = 1.0) => {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
     let y;
-    if (ym <= 0) {
-      // 雾底以下：二次软趾部，0 → TOE
-      y = black > 0 ? TOE * Math.pow(x / black, 2) : 0;
+    if (xKnee > 1e-4 && x < xKnee) {
+      // C1 连续三次 Hermite 样条平滑连接 (0,0) 与 (xKnee, yAtKneeRaw)
+      const secant = yAtKneeRaw / xKnee;
+      const m0 = Math.max(0.38, Math.min(secant * 0.72, 0.88));
+      const m1 = Math.min(scale, secant * 1.35);
+      const u = x / xKnee;
+      const u2 = u * u;
+      const u3 = u2 * u;
+      y =
+        m0 * xKnee * (u3 - 2 * u2 + u) +
+        yAtKneeRaw * (-2 * u3 + 3 * u2) +
+        m1 * xKnee * (u3 - u2);
     } else {
-      let v = ym;
-      if (v > yKnee && yMax > yKnee + 1e-3) {
-        // 大气光以上的高光：软肩部把 [yKnee, yMax] 压进 [yKnee, 1]
-        const z = Math.min(1, (v - yKnee) / (yMax - yKnee));
-        v = yKnee + (1 - yKnee) * (1 - Math.pow(1 - z, 1.8));
-      }
-      v = Math.min(1, v);
-      y = TOE + (1 - TOE) * v;
+      y = yAtKneeRaw + (x - xKnee) * scale;
     }
-    // 3. 轻微反对称 S：g(y) = y + s·y(1−y)(2y−1)，g(0) = 0、g(1) = 1
-    const out = y + S_AMOUNT * y * (1 - y) * (2 * y - 1);
-    values.push(Math.max(0, Math.min(1, out)).toFixed(4));
+
+    // 大气光 A 以上的高光软肩部压缩：最亮的雾锚定在自身附近，高光绝不爆白截断
+    if (y > yKneeHigh && yMax > yKneeHigh + 1e-3) {
+      const z = Math.min(1, (y - yKneeHigh) / (yMax - yKneeHigh));
+      y = yKneeHigh + (1 - yKneeHigh) * (1 - Math.pow(1 - z, 1.65));
+    }
+    y = Math.max(0, Math.min(1, y));
+
+    // 带暗部保护门 (shadowGuard) 的中间调通透曲线：暗部 y < 0.22 时不作任何负向下压
+    const shadowGuard = Math.min(1, Math.pow(y / 0.22, 2));
+    const sDelta = midContrast * shadowGuard * y * (1 - y) * (2 * y - 0.82);
+    const finalY = Math.max(0, Math.min(1, y + sDelta));
+    return Math.max(0, Math.min(1, x + (finalY - x) * factor));
+  };
+
+  const lumaVals = [];
+  const softVals = [];
+  let prevL = 0;
+  let prevS = 0;
+  for (let k = 0; k < SAMPLES; k++) {
+    const x = k / (SAMPLES - 1);
+    const yl = k === 0 ? 0 : k === SAMPLES - 1 ? 1 : Math.max(prevL, evalCurvePoint(x, 1.0));
+    const ys = k === 0 ? 0 : k === SAMPLES - 1 ? 1 : Math.max(prevS, evalCurvePoint(x, 0.42));
+    prevL = yl;
+    prevS = ys;
+    lumaVals.push(yl.toFixed(4));
+    softVals.push(ys.toFixed(4));
   }
 
-  return values.join(' ');
+  // 3. 自适应色度阻尼：根据中灰亮度下沉比例与原片饱和度，精准锁定自然色彩，防止去灰后过饱和
+  const midOut = Number(lumaVals[16]) || 0.5;
+  const midRatio = Math.max(0.72, Math.min(1.0, midOut / 0.5));
+  const meanSat = typeof hist.meanSat === 'number' ? hist.meanSat : 0.26;
+  const highSatRatio = typeof hist.highSatRatio === 'number' ? hist.highSatRatio : 0.04;
+
+  // 基准色度随亮度下沉同步缩放，抵消亮度变暗带来的感知饱和度膨胀
+  let chromaGain = midRatio * 0.98;
+  if (meanSat > 0.32 || highSatRatio > 0.10) {
+    // 原片已经鲜艳：启动防过饱和保护，进一步收敛色差
+    const satExcess = Math.min(1, Math.max((meanSat - 0.32) / 0.25, (highSatRatio - 0.10) / 0.25));
+    chromaGain *= 1 - 0.12 * satExcess;
+  } else if (meanSat < 0.18 && hazeFactor > 0.3) {
+    // 原片被浓雾冲淡发白：温和补偿 4%~7% 的自然色度
+    chromaGain = Math.min(1.03, chromaGain * (1 + 0.07 * hazeFactor));
+  }
+  chromaGain = +Math.max(0.76, Math.min(1.04, chromaGain)).toFixed(4);
+
+  // 4. 局部微反差 (Local Clarity) 权重：雾越重局部清晰化越明显，仅作用于亮度通道
+  const clarityAmt = +(0.03 + 0.09 * hazeFactor * Math.min(1.3, strength)).toFixed(3);
+
+  return {
+    lumaTable: lumaVals.join(' '),
+    rgbSoftTable: softVals.join(' '),
+    chromaMatrix: buildChromaMatrix(chromaGain),
+    clarityK2: +(1 + clarityAmt).toFixed(3),
+    clarityK3: +(-clarityAmt).toFixed(3),
+    mixLuma: 0.85,
+    mixRgb: 0.15,
+    chromaGain,
+    hazeFactor: +hazeFactor.toFixed(3),
+    lo,
+    dcLo,
+    A,
+  };
+}
+
+/**
+ * 智能去灰曲线生成器 —— 返回 33 个采样点的 SVG tableValues 字符串
+ */
+function computeDehazeCurve(hist, strengthArg) {
+  return computeDehazeProfile(hist, strengthArg).lumaTable;
+}
+
+/**
+ * 将去灰配置写入指定的 SVG 滤镜节点簇（支持全局主滤镜与对比工作台各槽位独立滤镜）
+ */
+function applyProfileToFilterDOM(idPrefix, profile) {
+  if (!profile) return;
+  const setAttr = (id, attr, val) => {
+    const node = $(`#${id}`);
+    if (node && node.setAttribute) node.setAttribute(attr, String(val));
+  };
+  for (const ch of ['r', 'g', 'b']) {
+    setAttr(`${idPrefix}-luma-${ch}`, 'tableValues', profile.lumaTable);
+    setAttr(`${idPrefix}-func-${ch}`, 'tableValues', profile.rgbSoftTable || profile.lumaTable);
+  }
+  setAttr(`${idPrefix}-chroma`, 'values', profile.chromaMatrix);
+  setAttr(`${idPrefix}-clarity`, 'k2', profile.clarityK2);
+  setAttr(`${idPrefix}-clarity`, 'k3', profile.clarityK3);
+  setAttr(`${idPrefix}-mix`, 'k2', profile.mixLuma);
+  setAttr(`${idPrefix}-mix`, 'k3', profile.mixRgb);
+}
+
+/**
+ * 为对比工作台槽位按需创建并更新独立的 SVG <filter>，
+ * 解决多张不同照片同时开启去灰对比时共用单一全局滤镜互相覆盖曲线的问题。
+ */
+function updateSlotDehazeFilter(slotIdx, hist) {
+  const profile = computeDehazeProfile(hist);
+  // 始终同步一份到主滤镜以兼容无 DOM 克隆的简单测试沙盒
+  applyProfileToFilterDOM('pv-dehaze', profile);
+
+  const filterId = `pv-dehaze-slot-${slotIdx}`;
+  const defs = $('#pv-dehaze-defs');
+  if (defs && typeof document.createElementNS === 'function') {
+    let slotFilter = $(`#${filterId}`);
+    if (!slotFilter) {
+      const svgNS = 'http://www.w3.org/2000/svg';
+      slotFilter = document.createElementNS(svgNS, 'filter');
+      slotFilter.setAttribute('id', filterId);
+      slotFilter.setAttribute('color-interpolation-filters', 'sRGB');
+      slotFilter.setAttribute('x', '0%');
+      slotFilter.setAttribute('y', '0%');
+      slotFilter.setAttribute('width', '100%');
+      slotFilter.setAttribute('height', '100%');
+      slotFilter.innerHTML = `
+        <feColorMatrix in="SourceGraphic" type="matrix" values="0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0 0 0 1 0" result="orig_luma" />
+        <feGaussianBlur id="${filterId}-blur" in="orig_luma" stdDeviation="2.8" edgeMode="duplicate" result="luma_blur" />
+        <feComposite id="${filterId}-clarity" in="orig_luma" in2="luma_blur" operator="arithmetic" k1="0" k2="1.10" k3="-0.10" k4="0" result="luma_crisp" />
+        <feComponentTransfer in="luma_crisp" result="luma_dehazed">
+          <feFuncR id="${filterId}-luma-r" type="table" tableValues="0 1" />
+          <feFuncG id="${filterId}-luma-g" type="table" tableValues="0 1" />
+          <feFuncB id="${filterId}-luma-b" type="table" tableValues="0 1" />
+        </feComponentTransfer>
+        <feColorMatrix id="${filterId}-chroma" in="SourceGraphic" type="matrix" values="${profile.chromaMatrix}" result="chroma_biased" />
+        <feComposite in="luma_dehazed" in2="chroma_biased" operator="arithmetic" k1="0" k2="1" k3="2" k4="-1" result="luma_color" />
+        <feComponentTransfer in="SourceGraphic" result="rgb_soft">
+          <feFuncR id="${filterId}-func-r" type="table" tableValues="0 1" />
+          <feFuncG id="${filterId}-func-g" type="table" tableValues="0 1" />
+          <feFuncB id="${filterId}-func-b" type="table" tableValues="0 1" />
+        </feComponentTransfer>
+        <feComposite id="${filterId}-mix" in="luma_color" in2="rgb_soft" operator="arithmetic" k1="0" k2="0.85" k3="0.15" k4="0" />
+      `;
+      defs.appendChild(slotFilter);
+    }
+    applyProfileToFilterDOM(filterId, profile);
+  }
+  return profile;
+}
+
+function updateThumbDehazeFilter() {
+  const thumbProfile = computeDehazeProfile(
+    { l: Array.from({ length: 256 }, (_, i) => (i >= 28 && i <= 235 ? 100 : 5)) },
+    S.dehaze.strength
+  );
+  for (const ch of ['r', 'g', 'b']) {
+    const node = $(`#pv-dehaze-thumb-${ch}`);
+    if (node && node.setAttribute) node.setAttribute('tableValues', thumbProfile.lumaTable);
+  }
 }
 
 function updateDehazeFilter(hist) {
   S.dehaze.curHist = hist;
-  const tableValues = computeDehazeCurve(hist);
-  const fr = $('#pv-dehaze-func-r');
-  const fg = $('#pv-dehaze-func-g');
-  const fb = $('#pv-dehaze-func-b');
-  if (fr && fr.setAttribute) fr.setAttribute('tableValues', tableValues);
-  if (fg && fg.setAttribute) fg.setAttribute('tableValues', tableValues);
-  if (fb && fb.setAttribute) fb.setAttribute('tableValues', tableValues);
+  const profile = computeDehazeProfile(hist, S.dehaze.strength);
+  S.dehaze.curProfile = profile;
+  applyProfileToFilterDOM('pv-dehaze', profile);
+  return profile;
 }
 
 /**
  * 确保 SVG 去灰滤镜用的是这张照片自己的曲线。
- * 直方图可能还没算过（直方图面板关着、加载时去灰也没开），这时必须现算，
- * 否则滤镜会沿用上一张照片的曲线，效果完全不对。token 非空时只在仍是当前大图时才写入。
  */
-function ensureDehazeCurve(rec, token) {
+function ensureDehazeCurve(rec, token, slotIdx = null) {
   if (!rec || rec.error || !rec.blob) return;
-  drawHistogramFor(rec, token);
+  if (slotIdx !== null && rec.hist) {
+    updateSlotDehazeFilter(slotIdx, rec.hist);
+    return;
+  }
+  drawHistogramFor(rec, token, slotIdx);
+}
+
+function presetLabelForStrength(pct) {
+  if (pct <= 75) return '轻柔';
+  if (pct >= 120) return '强力';
+  return '标准';
+}
+
+function setDehazeStrength(pct, opts = {}) {
+  const clamped = Math.max(25, Math.min(150, Math.round(Number(pct) || 100)));
+  S.dehaze.strength = clamped;
+  S.dehaze.preset = clamped <= 75 ? 'soft' : clamped >= 120 ? 'strong' : 'standard';
+
+  updateThumbDehazeFilter();
+  if (S.dehaze.curHist) {
+    updateDehazeFilter(S.dehaze.curHist);
+  }
+  if (S.mode === 'loupe') {
+    const g = S.view[S.cur];
+    const rec = g && fullCache.get(g.primary);
+    if (rec && rec.hist) {
+      updateDehazeFilter(rec.hist);
+      if (S.settings.showHistogram) drawHistogram(rec.hist);
+    }
+    if (g) renderStageBadges(g);
+  } else if (S.mode === 'compare') {
+    S.compare.items.forEach((it, idx) => {
+      const rec = fullCache.get(it.primary);
+      if (rec && rec.hist) updateSlotDehazeFilter(idx, rec.hist);
+    });
+  }
+  syncDehazeControlsUI();
+  if (opts.toast) {
+    toast(`✨ 去灰强度已设为：${presetLabelForStrength(clamped)} (${clamped}%)`);
+  }
+}
+
+function cycleDehazePreset() {
+  if (!S.dehaze.active) {
+    S.dehaze.active = true;
+  }
+  const curIdx = DEHAZE_PRESETS.findIndex((p) => p.key === S.dehaze.preset);
+  const next = DEHAZE_PRESETS[(curIdx + 1) % DEHAZE_PRESETS.length];
+  S.dehaze.preset = next.key;
+  setDehazeStrength(next.strength, { toast: true });
+  syncDehazeUI();
+}
+
+function syncDehazeControlsUI() {
+  const wrap = $('#dehaze-strength-wrap');
+  if (wrap) wrap.hidden = !S.dehaze.active;
+  const slider = $('#dehaze-strength');
+  if (slider) slider.value = S.dehaze.strength;
+  const valEl = $('#dehaze-strength-val');
+  if (valEl) valEl.textContent = `${S.dehaze.strength}%`;
+  const presetBtn = $('#btn-dehaze-preset');
+  const label = presetLabelForStrength(S.dehaze.strength);
+  if (presetBtn) presetBtn.textContent = label;
+  const cmpPresetLabel = $('#cmp-dehaze-preset-label');
+  if (cmpPresetLabel) cmpPresetLabel.textContent = `${label} ${S.dehaze.strength}%`;
 }
 
 function toggleDehaze() {
   S.dehaze.active = !S.dehaze.active;
   syncDehazeUI();
   if (S.dehaze.active) {
-    toast('✨ 已开启照片智能去灰 (自适应动态通透)');
+    const label = presetLabelForStrength(S.dehaze.strength);
+    toast(`✨ 已开启智能去灰 · ${label}模式 (${S.dehaze.strength}% 亮度保持防死黑)`);
   } else {
     toast('已恢复原片色彩');
   }
@@ -785,7 +1085,7 @@ function toggleDehaze() {
 function toggleCompareDehaze() {
   S.dehaze.active = !S.dehaze.active;
   syncDehazeUI();
-  toast(S.dehaze.active ? '✨ 对比槽位已开启去灰增强' : '对比槽位已恢复原片色彩');
+  toast(S.dehaze.active ? `✨ 对比槽位已开启去灰增强 (${S.dehaze.strength}%)` : '对比槽位已恢复原片色彩');
 }
 
 function syncDehazeUI() {
@@ -793,14 +1093,33 @@ function syncDehazeUI() {
   if (btn) btn.classList.toggle('on', S.dehaze.active);
   const cmpBtn = $('#btn-cmp-dehaze-toggle');
   if (cmpBtn) cmpBtn.classList.toggle('active', S.dehaze.active);
+  syncDehazeControlsUI();
+  updateThumbDehazeFilter();
+
+  // 同步网格与胶片条缩略图的去灰状态
+  refreshCards();
+  if (strip && strip.children) {
+    for (const it of strip.children) {
+      const i = +it.dataset.i;
+      const g = S.view[i];
+      const img = it.querySelector && it.querySelector('img');
+      if (img && img.classList) {
+        img.classList.toggle('dehazed-thumb', Boolean(S.dehaze.active && g && g.state !== 'del'));
+      }
+    }
+  }
 
   if (S.mode === 'loupe') {
     loupeImg.classList.toggle('dehazed', S.dehaze.active);
     const g = S.view[S.cur];
     if (g) {
       renderStageBadges(g);
-      // 直方图可能还没算过（面板关着、加载时去灰也没开），不能沿用上一张照片的曲线
-      if (S.dehaze.active) ensureDehazeCurve(fullCache.get(g.primary), S.loupe.token);
+      const rec = fullCache.get(g.primary);
+      if (S.dehaze.active) {
+        ensureDehazeCurve(rec, S.loupe.token);
+      } else if (rec && rec.hist && S.settings.showHistogram) {
+        drawHistogram(rec.hist);
+      }
     }
   } else if (S.mode === 'compare') {
     renderCompare();
@@ -811,7 +1130,7 @@ function syncDehazeUI() {
  * 一键将当前照片以「原片 ⇄ 去灰」模式展开在细节对比工作台中
  */
 function openDehazeCompare(targetG) {
-  const g = targetG || S.view[S.cur] || (S.compare.items[S.compare.curSlot]);
+  const g = targetG || S.view[S.cur] || S.compare.items[S.compare.curSlot];
   if (!g) {
     toast('当前没有可对比的照片', { err: true });
     return;
@@ -1127,7 +1446,12 @@ function renderSplitCompare() {
     const viewport = el('div', 'slot-viewport');
     const img = el('img');
     img.draggable = false;
-    if (isSlotDehazed) img.classList.add('dehazed');
+    if (isSlotDehazed) {
+      img.classList.add('dehazed');
+      if ($('#pv-dehaze-defs') && typeof document.createElementNS === 'function') {
+        img.style.filter = `url(#pv-dehaze-slot-${idx})`;
+      }
+    }
     viewport.appendChild(img);
 
     const zoomTag = el('div', 'slot-zoom-tag');
@@ -1161,8 +1485,8 @@ function renderSplitCompare() {
       item.srcW = rec.w || 0;
       item.srcH = rec.h || 0;
 
-      // 去灰槽位：曲线必须是这张照片自己的
-      if (isSlotDehazed) ensureDehazeCurve(rec, null);
+      // 去灰槽位：曲线必须是这张照片自己的专属实例
+      if (isSlotDehazed) ensureDehazeCurve(rec, null, idx);
 
       // 渲染 EXIF 胶囊
       renderSlotExif(exifPill, rec.exif);
@@ -2105,17 +2429,21 @@ function applyFull(g, rec, token) {
   else $('#histogram').getContext('2d').clearRect(0, 0, 4000, 4000);
 }
 
-async function drawHistogramFor(rec, token) {
+async function drawHistogramFor(rec, token, slotIdx = null) {
   if (rec.hist) {
-    if (!token || token === S.loupe.token) updateDehazeFilter(rec.hist);
-    if (S.settings.showHistogram) drawHistogram(rec.hist);
+    if (slotIdx !== null) updateSlotDehazeFilter(slotIdx, rec.hist);
+    else if (!token || token === S.loupe.token) updateDehazeFilter(rec.hist);
+    if (S.settings.showHistogram && (!token || token === S.loupe.token)) drawHistogram(rec.hist);
     return;
   }
-  if (S.settings.showHistogram) $('#histogram').getContext('2d').clearRect(0, 0, 4000, 4000);
+  if (S.settings.showHistogram && slotIdx === null) $('#histogram').getContext('2d').clearRect(0, 0, 4000, 4000);
   const ab = await rec.blob.arrayBuffer();
   const h = await workerCall({ type: 'hist', buf: ab });
   if (!h.ok) return;
   rec.hist = h.hist;
+  if (slotIdx !== null) {
+    updateSlotDehazeFilter(slotIdx, h.hist);
+  }
   // 必须只在当前大图仍是这张（token 一致）时才更新活动滤镜，避免快速连续切图时的竞态污染
   if (!token || token === S.loupe.token) {
     updateDehazeFilter(h.hist);
@@ -2255,7 +2583,9 @@ function renderStageBadges(g) {
   if (g.state === 'del') add('✕ 已删除（在回收站）', 'd');
   if (S.dehaze && S.dehaze.active) {
     const b = el('div', 'sbadge dehaze');
-    b.innerHTML = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3Z"/></svg><span>去灰开启</span>';
+    const pct = S.dehaze.strength || 100;
+    const label = presetLabelForStrength(pct);
+    b.innerHTML = `<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3Z"/></svg><span>去灰 · ${label} ${pct}%</span>`;
     box.appendChild(b);
   }
   add(g.ext + (g.hasPair ? ' + JPG' : ''));
@@ -2301,6 +2631,35 @@ function renderInfo(g, r) {
   list.append(dt, dd);
 }
 
+/**
+ * 按去灰曲线重映射直方图并做三点邻域平滑（消除离散分桶梳状空隙），
+ * 让摄影师在开启去灰或拖动强度滑块时，右侧直方图实时呈现去灰后的真实影调分布。
+ */
+function remapHistogramWithCurve(arr, curveParts) {
+  if (!arr || !curveParts || curveParts.length < 2) return arr;
+  const n = curveParts.length - 1;
+  const raw = new Float64Array(256);
+  for (let i = 0; i < 256; i++) {
+    const count = arr[i];
+    if (!count) continue;
+    const pos = (i / 255) * n;
+    const i0 = Math.floor(pos);
+    const i1 = Math.min(n, i0 + 1);
+    const t = pos - i0;
+    const y = curveParts[i0] * (1 - t) + curveParts[i1] * t;
+    const targetIdx = Math.max(0, Math.min(255, Math.round(y * 255)));
+    raw[targetIdx] += count;
+  }
+  // 轻度三点平滑消除整数舍入造成的锯齿空洞
+  const out = new Float64Array(256);
+  out[0] = raw[0] * 0.7 + raw[1] * 0.3;
+  out[255] = raw[255] * 0.7 + raw[254] * 0.3;
+  for (let i = 1; i < 255; i++) {
+    out[i] = raw[i - 1] * 0.22 + raw[i] * 0.56 + raw[i + 1] * 0.22;
+  }
+  return out;
+}
+
 function drawHistogram(h) {
   const c = $('#histogram');
   if (!c) return;
@@ -2308,8 +2667,28 @@ function drawHistogram(h) {
   const W = (c.width = c.clientWidth * devicePixelRatio);
   const H = (c.height = 84 * devicePixelRatio);
   ctx.clearRect(0, 0, W, H);
+
+  const histLabel = $('.hist-label');
+  const isDehazed = Boolean(S.dehaze && S.dehaze.active);
+  if (histLabel) {
+    histLabel.textContent = isDehazed
+      ? `RGB 直方图分布 · 去灰增强 (${S.dehaze.strength}%)`
+      : 'RGB 直方图分布';
+  }
+
+  let rArr = h.r;
+  let gArr = h.g;
+  let bArr = h.b;
+  if (isDehazed) {
+    const profile = S.dehaze.curProfile || computeDehazeProfile(h, S.dehaze.strength);
+    const parts = profile.lumaTable.split(' ').map(Number);
+    rArr = remapHistogramWithCurve(h.r, parts);
+    gArr = remapHistogramWithCurve(h.g, parts);
+    bArr = remapHistogramWithCurve(h.b, parts);
+  }
+
   let max = 0;
-  for (let i = 1; i < 255; i++) max = Math.max(max, h.r[i], h.g[i], h.b[i]);
+  for (let i = 1; i < 255; i++) max = Math.max(max, rArr[i], gArr[i], bArr[i]);
   if (!max) return;
 
   ctx.globalCompositeOperation = 'screen';
@@ -2338,9 +2717,9 @@ function drawHistogram(h) {
     }
   };
 
-  drawChannel(h.r, 'rgba(239, 68, 68, 0.45)', 'rgba(248, 113, 113, 0.7)');
-  drawChannel(h.g, 'rgba(34, 197, 94, 0.45)', 'rgba(74, 222, 128, 0.7)');
-  drawChannel(h.b, 'rgba(56, 189, 248, 0.45)', 'rgba(125, 211, 252, 0.7)');
+  drawChannel(rArr, 'rgba(239, 68, 68, 0.45)', 'rgba(248, 113, 113, 0.7)');
+  drawChannel(gArr, 'rgba(34, 197, 94, 0.45)', 'rgba(74, 222, 128, 0.7)');
+  drawChannel(bArr, 'rgba(56, 189, 248, 0.45)', 'rgba(125, 211, 252, 0.7)');
   ctx.globalCompositeOperation = 'source-over';
 }
 
@@ -2352,6 +2731,9 @@ function buildFilmstrip() {
     const it = el('div', 'fs-item');
     it.dataset.i = i;
     const img = el('img');
+    if (S.dehaze && S.dehaze.active && g.state !== 'del') {
+      img.classList.add('dehazed-thumb');
+    }
     it.appendChild(img);
     it.onclick = () => {
       S.cur = i;
@@ -2394,6 +2776,10 @@ function syncFilmstrip() {
     it.classList.toggle('cur', i === S.cur);
     it.classList.toggle('fav', g.state === 'fav');
     it.classList.toggle('del', g.state === 'del');
+    const img = it.querySelector && it.querySelector('img');
+    if (img && img.classList) {
+      img.classList.toggle('dehazed-thumb', Boolean(S.dehaze && S.dehaze.active && g.state !== 'del'));
+    }
   }
   const cur = strip.children[S.cur];
   if (cur) {
@@ -2746,7 +3132,7 @@ document.addEventListener('keydown', (e) => {
         return pickCompareWinner(S.compare.curSlot);
       case 'h':
         e.preventDefault();
-        return toggleCompareDehaze();
+        return e.shiftKey ? cycleDehazePreset() : toggleCompareDehaze();
       case 'f':
         e.preventDefault();
         return toggleSlotFav(S.compare.curSlot);
@@ -2809,7 +3195,7 @@ document.addEventListener('keydown', (e) => {
   switch (k.toLowerCase()) {
     case 'c': e.preventDefault(); return openCompare();
     case 'f': e.preventDefault(); return actFavorite();
-    case 'h': e.preventDefault(); return toggleDehaze();
+    case 'h': e.preventDefault(); return e.shiftKey ? cycleDehazePreset() : toggleDehaze();
     case 'x': e.preventDefault(); return actDelete();
     case 'd': e.preventDefault(); return actDelete();
     case 'r': e.preventDefault(); return refreshFolder();
@@ -2927,6 +3313,12 @@ $('#btn-grid').onclick = () => (S.mode === 'grid' ? showLoupe() : showGrid());
 $('#btn-compare').onclick = toggleCompare;
 const btnDehaze = $('#btn-dehaze');
 if (btnDehaze) btnDehaze.onclick = toggleDehaze;
+const btnDehazePreset = $('#btn-dehaze-preset');
+if (btnDehazePreset) btnDehazePreset.onclick = cycleDehazePreset;
+const sliderDehazeStrength = $('#dehaze-strength');
+if (sliderDehazeStrength) {
+  sliderDehazeStrength.oninput = (e) => setDehazeStrength(e.target.value);
+}
 $('#btn-theme').onclick = toggleTheme;
 $('#btn-help').onclick = () => ($('#help-modal').hidden = false);
 $('#btn-close-help').onclick = () => ($('#help-modal').hidden = true);
@@ -2965,6 +3357,8 @@ const btnCmpDehazePair = $('#btn-cmp-dehaze-pair');
 if (btnCmpDehazePair) btnCmpDehazePair.onclick = () => openDehazeCompare();
 const btnCmpDehazeToggle = $('#btn-cmp-dehaze-toggle');
 if (btnCmpDehazeToggle) btnCmpDehazeToggle.onclick = toggleCompareDehaze;
+const btnCmpDehazePreset = $('#btn-cmp-dehaze-preset');
+if (btnCmpDehazePreset) btnCmpDehazePreset.onclick = cycleDehazePreset;
 $('#btn-cmp-add').onclick = addSlotFromAlbum;
 $('#btn-cmp-close').onclick = closeCompare;
 initBlinkInteractions();
@@ -3053,6 +3447,9 @@ window.__pv = {
   applyTheme,
   toggleDehaze,
   computeDehazeCurve,
+  computeDehazeProfile,
+  setDehazeStrength,
+  cycleDehazePreset,
   openDehazeCompare,
   toggleCompareDehaze,
   _int: { getThumb, urlCache, inflight, queue, pool, fullCache, loadFull, get running() { return running; } },

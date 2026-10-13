@@ -2776,11 +2776,80 @@ kbd {
   box-shadow: 0 2px 4px rgba(0,0,0,0.5);
 }
 
-/* ============ 智能去灰与动态通透滤镜系统 ============ */
+/* ============ 智能去灰与动态通透滤镜系统 2.0 ============ */
 .dehazed {
   filter: url(#pv-dehaze-filter);
   /* 确保 GPU 硬件合成抗锯齿平滑 */
   will-change: filter;
+}
+
+.dehazed-thumb {
+  filter: url(#pv-dehaze-thumb-filter);
+}
+
+/* 顶栏去灰强度微调组件 */
+.dehaze-strength-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 5px;
+  border-radius: var(--r-md);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  box-shadow: 0 0 12px var(--accent-glow);
+  animation: dehaze-bar-in 0.18s var(--ease-smooth);
+}
+
+@keyframes dehaze-bar-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.dehaze-preset-pill {
+  padding: 2px 7px;
+  border-radius: var(--r-xs);
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffffff;
+  background: var(--bg-btn-primary);
+  border: 1px solid var(--accent-border);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.dehaze-preset-pill:hover {
+  background: var(--bg-btn-primary-hover);
+  transform: translateY(-0.5px);
+}
+
+.dehaze-strength-wrap input[type="range"] {
+  width: 68px;
+}
+
+.dehaze-pct {
+  min-width: 34px;
+  text-align: right;
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.cmp-dehaze-preset .z-label {
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  padding: 1px 6px;
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
 }
 
 .sbadge.dehaze {
@@ -2833,4 +2902,5 @@ kbd {
   border-color: var(--accent-border) !important;
   color: var(--accent) !important;
 }
+
 

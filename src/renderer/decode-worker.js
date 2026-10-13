@@ -71,12 +71,37 @@ async function makeHistogram({ buf }) {
   bmp.close();
   const { data } = ctx.getImageData(0, 0, c.width, c.height);
   const r = new Uint32Array(256), g = new Uint32Array(256), b = new Uint32Array(256), l = new Uint32Array(256);
+  const dc = new Uint32Array(256); // 暗通道 min(R,G,B) 分布，用于约束黑场扣除上限、防止次通道压成死黑
+  let satSum = 0;
+  let highSatCount = 0;
+  let validSatCount = 0;
   for (let i = 0; i < data.length; i += 4) {
     const R = data[i], G = data[i + 1], B = data[i + 2];
     r[R]++; g[G]++; b[B]++;
     l[(0.2126 * R + 0.7152 * G + 0.0722 * B) | 0]++;
+    const minC = R < G ? (R < B ? R : B) : (G < B ? G : B);
+    const maxC = R > G ? (R > B ? R : B) : (G > B ? G : B);
+    dc[minC]++;
+    if (maxC > 20 && minC < 245) {
+      const sat = (maxC - minC) / maxC;
+      satSum += sat;
+      validSatCount++;
+      if (sat > 0.55) highSatCount++;
+    }
   }
-  return { hist: { r: Array.from(r), g: Array.from(g), b: Array.from(b), l: Array.from(l) } };
+  const meanSat = validSatCount > 0 ? +(satSum / validSatCount).toFixed(4) : 0.25;
+  const highSatRatio = validSatCount > 0 ? +(highSatCount / validSatCount).toFixed(4) : 0;
+  return {
+    hist: {
+      r: Array.from(r),
+      g: Array.from(g),
+      b: Array.from(b),
+      l: Array.from(l),
+      dc: Array.from(dc),
+      meanSat,
+      highSatRatio,
+    },
+  };
 }
 
 self.onmessage = async (e) => {

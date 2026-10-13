@@ -12,16 +12,65 @@
 
 <body>
 
-  <!-- 智能去灰与动态通透滤镜引擎 (GPU 硬件加速) -->
+  <!-- 智能去灰与动态通透滤镜引擎 2.0 (亮度-色度解耦 + 局部微反差 GPU 管线) -->
   <svg id="pv-dehaze-svg" style="display:none;position:absolute;width:0;height:0;" aria-hidden="true">
-    <defs>
-      <filter id="pv-dehaze-filter" color-interpolation-filters="sRGB">
-        <feComponentTransfer id="pv-dehaze-transfer">
-          <feFuncR id="pv-dehaze-func-r" type="table" tableValues="0 0.02 0.05 0.1 0.16 0.23 0.31 0.4 0.49 0.58 0.67 0.76 0.84 0.91 0.96 1" />
-          <feFuncG id="pv-dehaze-func-g" type="table" tableValues="0 0.02 0.05 0.1 0.16 0.23 0.31 0.4 0.49 0.58 0.67 0.76 0.84 0.91 0.96 1" />
-          <feFuncB id="pv-dehaze-func-b" type="table" tableValues="0 0.02 0.05 0.1 0.16 0.23 0.31 0.4 0.49 0.58 0.67 0.76 0.84 0.91 0.96 1" />
+    <defs id="pv-dehaze-defs">
+      <filter id="pv-dehaze-filter" color-interpolation-filters="sRGB" x="0%" y="0%" width="100%" height="100%">
+        <!-- 1. 提取原片感知亮度 Y (Rec.709 Luma)，将明暗去灰与色彩饱和度彻底解耦 -->
+        <feColorMatrix in="SourceGraphic" type="matrix" values="
+          0.2126 0.7152 0.0722 0 0
+          0.2126 0.7152 0.0722 0 0
+          0.2126 0.7152 0.0722 0 0
+          0      0      0      1 0" result="orig_luma" />
+        <!-- 2. 局部微反差 (Local Clarity)：剥离薄雾模糊感，仅作用于亮度通道不产生色边 -->
+        <feGaussianBlur id="pv-dehaze-blur" in="orig_luma" stdDeviation="2.8" edgeMode="duplicate" result="luma_blur" />
+        <feComposite id="pv-dehaze-clarity" in="orig_luma" in2="luma_blur" operator="arithmetic"
+          k1="0" k2="1.10" k3="-0.10" k4="0" result="luma_crisp" />
+        <!-- 3. 主亮度去灰曲线：消除灰雾纱幕、保护暗部层次与高光细节 -->
+        <feComponentTransfer id="pv-dehaze-luma-transfer" in="luma_crisp" result="luma_dehazed">
+          <feFuncR id="pv-dehaze-luma-r" type="table" tableValues="0 1" />
+          <feFuncG id="pv-dehaze-luma-g" type="table" tableValues="0 1" />
+          <feFuncB id="pv-dehaze-luma-b" type="table" tableValues="0 1" />
         </feComponentTransfer>
-        <feColorMatrix type="saturate" values="1.08" />
+        <!-- 4. 无损提取原片色度差 0.5 + 0.5 * c * (RGB - Y)，100% 锁定原片色相不偏色、不过饱和 -->
+        <feColorMatrix id="pv-dehaze-chroma" in="SourceGraphic" type="matrix" values="
+          0.3937 -0.3576 -0.0361 0 0.5
+         -0.1063  0.1424 -0.0361 0 0.5
+         -0.1063 -0.3576  0.4639 0 0.5
+          0       0       0      1 0" result="chroma_biased" />
+        <!-- 5. 重组去灰亮度与自然色度：Y' + c * (RGB - Y) -->
+        <feComposite in="luma_dehazed" in2="chroma_biased" operator="arithmetic"
+          k1="0" k2="1" k3="2" k4="-1" result="luma_color" />
+        <!-- 6. 柔和 RGB 辅助去雾分支（抑制次通道死黑，仅做温和暗部消雾） -->
+        <feComponentTransfer id="pv-dehaze-transfer" in="SourceGraphic" result="rgb_soft">
+          <feFuncR id="pv-dehaze-func-r" type="table" tableValues="0 0.03 0.062 0.095 0.128 0.162 0.197 0.232 0.268 0.304 0.341 0.378 0.416 0.454 0.492 0.531 0.569 0.608 0.646 0.684 0.722 0.759 0.795 0.831 0.865 0.898 0.928 0.955 0.976 0.99 0.997 1 1" />
+          <feFuncG id="pv-dehaze-func-g" type="table" tableValues="0 0.03 0.062 0.095 0.128 0.162 0.197 0.232 0.268 0.304 0.341 0.378 0.416 0.454 0.492 0.531 0.569 0.608 0.646 0.684 0.722 0.759 0.795 0.831 0.865 0.898 0.928 0.955 0.976 0.99 0.997 1 1" />
+          <feFuncB id="pv-dehaze-func-b" type="table" tableValues="0 0.03 0.062 0.095 0.128 0.162 0.197 0.232 0.268 0.304 0.341 0.378 0.416 0.454 0.492 0.531 0.569 0.608 0.646 0.684 0.722 0.759 0.795 0.831 0.865 0.898 0.928 0.955 0.976 0.99 0.997 1 1" />
+        </feComponentTransfer>
+        <!-- 7. 双路融合输出：兼顾纯正色相与通透反差 -->
+        <feComposite id="pv-dehaze-mix" in="luma_color" in2="rgb_soft" operator="arithmetic"
+          k1="0" k2="0.82" k3="0.18" k4="0" />
+      </filter>
+
+      <!-- 网格与胶片条缩略图专用轻量级通透滤镜 (零 CPU 开销) -->
+      <filter id="pv-dehaze-thumb-filter" color-interpolation-filters="sRGB">
+        <feColorMatrix in="SourceGraphic" type="matrix" values="
+          0.2126 0.7152 0.0722 0 0
+          0.2126 0.7152 0.0722 0 0
+          0.2126 0.7152 0.0722 0 0
+          0      0      0      1 0" result="th_luma" />
+        <feComponentTransfer in="th_luma" result="th_luma_mapped">
+          <feFuncR id="pv-dehaze-thumb-r" type="table" tableValues="0 0.024 0.051 0.080 0.111 0.144 0.178 0.214 0.251 0.289 0.328 0.368 0.409 0.450 0.492 0.534 0.576 0.618 0.659 0.700 0.740 0.779 0.816 0.852 0.885 0.916 0.943 0.966 0.983 0.994 0.999 1 1" />
+          <feFuncG id="pv-dehaze-thumb-g" type="table" tableValues="0 0.024 0.051 0.080 0.111 0.144 0.178 0.214 0.251 0.289 0.328 0.368 0.409 0.450 0.492 0.534 0.576 0.618 0.659 0.700 0.740 0.779 0.816 0.852 0.885 0.916 0.943 0.966 0.983 0.994 0.999 1 1" />
+          <feFuncB id="pv-dehaze-thumb-b" type="table" tableValues="0 0.024 0.051 0.080 0.111 0.144 0.178 0.214 0.251 0.289 0.328 0.368 0.409 0.450 0.492 0.534 0.576 0.618 0.659 0.700 0.740 0.779 0.816 0.852 0.885 0.916 0.943 0.966 0.983 0.994 0.999 1 1" />
+        </feComponentTransfer>
+        <feColorMatrix in="SourceGraphic" type="matrix" values="
+          0.3937 -0.3576 -0.0361 0 0.5
+         -0.1063  0.1424 -0.0361 0 0.5
+         -0.1063 -0.3576  0.4639 0 0.5
+          0       0       0      1 0" result="th_chroma" />
+        <feComposite in="th_luma_mapped" in2="th_chroma" operator="arithmetic"
+          k1="0" k2="1" k3="2" k4="-1" />
       </filter>
     </defs>
   </svg>
@@ -111,13 +160,19 @@
           </svg>
         </button>
 
-        <button class="icon-btn" id="btn-dehaze" title="照片智能去灰 (H)">
+        <button class="icon-btn" id="btn-dehaze" title="照片智能去灰 (H · Shift+H 切换强度)">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
             stroke-linecap="round" stroke-linejoin="round">
             <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z" />
             <path d="M5 3v4M3 5h4M19 17v4M17 19h4" />
           </svg>
         </button>
+
+        <div class="dehaze-strength-wrap" id="dehaze-strength-wrap" hidden title="去灰强度调节 (点击档位切换 轻柔/标准/强力 · Shift+H)">
+          <button class="dehaze-preset-pill" id="btn-dehaze-preset" type="button" title="点击循环切换档位 (Shift+H)">标准</button>
+          <input type="range" id="dehaze-strength" min="25" max="150" step="5" value="100" />
+          <span class="dehaze-pct" id="dehaze-strength-val">100%</span>
+        </div>
 
         <div class="slider-wrap" title="缩略图大小">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
@@ -428,13 +483,17 @@
           <span>原片⇄去灰</span>
         </button>
 
-        <!-- 对比槽位去灰增强开关 -->
+        <!-- 对比槽位去灰增强开关与强度档位 -->
         <button class="cmp-btn-toggle" id="btn-cmp-dehaze-toggle" title="切换对比槽位去灰增强 (H)">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
             <circle cx="12" cy="12" r="3" fill="currentColor" opacity="0.3" />
           </svg>
           <span>去灰</span>
+        </button>
+
+        <button class="cmp-btn-tool cmp-dehaze-preset" id="btn-cmp-dehaze-preset" title="点击切换去灰强度档位：轻柔 / 标准 / 强力 (Shift+H)">
+          <span class="z-label" id="cmp-dehaze-preset-label">标准 100%</span>
         </button>
 
         <div class="dock-sep"></div>
@@ -760,7 +819,7 @@
             <div class="kbd-wrap"><kbd>F5</kbd><kbd>R</kbd></div><span>刷新文件夹内容</span>
           </div>
           <div class="key-item">
-            <div class="kbd-wrap"><kbd class="kbd-accent">H</kbd></div><span>照片智能去灰 (开/关)</span>
+            <div class="kbd-wrap"><kbd class="kbd-accent">H</kbd><kbd>Shift+H</kbd></div><span>智能去灰开关 / 切换强度</span>
           </div>
         </div>
 
@@ -770,7 +829,7 @@
             <div class="kbd-wrap"><kbd class="kbd-accent">C</kbd></div><span>进入 / 退出细节对比</span>
           </div>
           <div class="key-item">
-            <div class="kbd-wrap"><kbd class="kbd-accent">H</kbd></div><span>切换对比槽位去灰</span>
+            <div class="kbd-wrap"><kbd class="kbd-accent">H</kbd><kbd>Shift+H</kbd></div><span>对比槽位去灰 / 切换强度</span>
           </div>
           <div class="key-item">
             <div class="kbd-wrap"><kbd>S</kbd></div><span>切换视口同步联动</span>
